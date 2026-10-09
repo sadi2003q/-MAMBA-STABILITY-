@@ -99,7 +99,8 @@ def continuous_cycle(mu: float) -> dict:
     path = solve_ivp(lambda t, x: vdp(x, mu), (0, period), x_start, t_eval=grid,
                      rtol=1e-11, atol=1e-12).y
     divergence = mu * (1.0 - path[0] ** 2)
-    liouville = float(np.exp(np.trapezoid(divergence, grid)))
+    trapezoid = getattr(np, "trapezoid", None) or np.trapz   # NumPy 1.x has only trapz
+    liouville = float(np.exp(trapezoid(divergence, grid)))
 
     return {
         "period": float(period),
