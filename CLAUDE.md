@@ -210,7 +210,7 @@ python analysis/a01_augmented_jacobian_counterexample.py
 python tools/check_model.py --config configs/experiments/exp01_certificate_ablation.yaml
 
 # 2. tiny end-to-end run to confirm nothing crashes (minutes, not hours)
-python train.py --config configs/experiments/exp01_certificate_ablation.yaml --quick
+python train.py --config configs/experiments/exp01_certificate_ablation.yaml --quick yes
 
 # 3. the real single-seed run
 python train.py --config configs/experiments/exp01_certificate_ablation.yaml --seed 0
@@ -229,7 +229,7 @@ bash scripts/run_experiment.sh exp01_certificate_ablation
 pytest -q
 ```
 
-Common flags for `train.py`: `--seed` / `--seeds`, `--quick`, `--device auto|cpu|mps|cuda`, `--arms <names>` (run only some arms), `--fresh` (ignore previous results; default is to resume).
+Common options for `train.py` (on/off options take an explicit `yes` or `no`): `--seed` / `--seeds`, `--quick yes|no`, `--resume yes|no` (default yes; `no` starts over), `--ask-first yes|no`, `--estimate yes|no`, `--device auto|cpu|mps|cuda`, `--arms <names>` (run only some arms). Commands given to Sadi put each option on its own line with a trailing backslash.
 
 ## 8. Code conventions
 

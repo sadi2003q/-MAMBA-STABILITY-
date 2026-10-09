@@ -1,7 +1,9 @@
 """Re-evaluate saved checkpoints of an experiment (for example after adding a diagnostic).
 Rewrites each run's metrics.json and results.csv; never retrains.
 
-python evaluate.py --config configs/experiments/exp01_certificate_ablation.yaml
+python evaluate.py \
+    --config configs/experiments/exp01_certificate_ablation.yaml \
+    --quick no
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from tqdm.auto import tqdm  # noqa: E402
 from src.data.datasets import build_data  # noqa: E402
 from src.models.registry import build_model, count_parameters  # noqa: E402
 from src.training.trainer import evaluate_model, result_row  # noqa: E402
+from src.utils.cli import add_yes_no  # noqa: E402
 from src.utils.config import load_experiment, output_dir, resolve_arm  # noqa: E402
 from src.utils.device import pick_device  # noqa: E402
 from src.utils.io import append_result, load_json, save_json  # noqa: E402
@@ -30,7 +33,7 @@ from src.utils.summary import build_summary, read_results  # noqa: E402
 def main():
     p = argparse.ArgumentParser(description="Re-evaluate saved checkpoints.")
     p.add_argument("--config", required=True)
-    p.add_argument("--quick", action="store_true")
+    add_yes_no(p, "--quick", False, "re-evaluate the --quick run instead of the real one")
     p.add_argument("--device", default=None)
     p.add_argument("--output-root", default=None)
     args = p.parse_args()

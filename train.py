@@ -1,8 +1,15 @@
 """Train every arm of one experiment from one config, then write the plain-language summary.
 
-python train.py --config configs/experiments/exp01_certificate_ablation.yaml --seed 0
-python train.py --config ... --quick                 # code check only (tiny data, 2 epochs)
-python train.py --config ... --seeds 0 1 2 3 4 5 6 7  # Stage 2, only after Stage 1 says "worth confirming"
+python train.py \
+    --config configs/experiments/exp01_certificate_ablation.yaml \
+    --seed 0
+
+Options (on/off options take yes or no):
+    --quick yes        code check only (tiny data, 2 epochs); default no
+    --resume no        start over, ignoring earlier results and checkpoints; default yes
+    --ask-first no     do not ask before a long run; default yes (never asked when there is no keyboard)
+    --estimate no      skip the timing estimate; default yes
+    --seeds 0 1 2 3 4 5 6 7   Stage 2, only after Stage 1 says "worth confirming"
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from tqdm.auto import tqdm  # noqa: E402
 from src.data.datasets import build_data  # noqa: E402
 from src.models.registry import REFERENCE_PARAMETERS, build_model, count_parameters  # noqa: E402
 from src.training.trainer import result_row, time_batches, train_run  # noqa: E402
+from src.utils.cli import add_yes_no  # noqa: E402
 from src.utils.config import load_experiment, output_dir, resolve_arm, save_yaml  # noqa: E402
 from src.utils.device import describe, pick_device  # noqa: E402
 from src.utils.io import append_result, completed_runs, save_json  # noqa: E402
@@ -33,13 +41,13 @@ def parse_args():
     p.add_argument("--config", required=True)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--seeds", type=int, nargs="+")
-    p.add_argument("--quick", action="store_true", help="code check only: tiny data, 2 epochs")
+    add_yes_no(p, "--quick", False, "code check only: tiny data, 2 epochs")
     p.add_argument("--device", default=None, help="auto | cpu | mps | cuda (default: from config)")
     p.add_argument("--arms", nargs="+", help="run only these arms")
-    p.add_argument("--fresh", action="store_true", help="ignore previous results and checkpoints")
-    p.add_argument("--yes", action="store_true", help="do not ask for confirmation before long runs")
+    add_yes_no(p, "--resume", True, "continue finished and interrupted runs; no = start over")
+    add_yes_no(p, "--ask-first", True, "ask before starting a run longer than the configured limit")
     p.add_argument("--output-root", default=None, help="where outputs/ lives (default: repository outputs/)")
-    p.add_argument("--no-estimate", action="store_true", help="skip the timing estimate")
+    add_yes_no(p, "--estimate", True, "time a few batches per arm and print the run-time estimate")
     return p.parse_args()
 
 
@@ -56,7 +64,7 @@ def main():
     out = output_dir(exp, args.quick, args.output_root)
     out.mkdir(parents=True, exist_ok=True)
     results_csv = out / "results.csv"
-    if args.fresh and results_csv.exists():
+    if not args.resume and results_csv.exists():
         results_csv.rename(out / f"results_replaced_{time.strftime('%Y%m%d_%H%M%S')}.csv")
 
     device = pick_device(args.device or exp.get("device", "auto"))
@@ -92,7 +100,7 @@ def main():
         n_par = count_parameters(build_model(cfg))
         ref = REFERENCE_PARAMETERS.get(cfg["model"]["name"])
         ref_s = f"{ref:,}" if ref else "—"
-        if args.no_estimate:
+        if not args.estimate:
             est = None
         else:
             sec = time_batches(cfg, data, device)
@@ -106,7 +114,7 @@ def main():
           f"Estimated time for pending runs: {total:.0f} minutes" + (" (rough)" if total else ""))
     print("=" * 88)
     limit = exp.get("run", {}).get("long_run_confirm_minutes", 30)
-    if total > limit and not args.yes and sys.stdin.isatty():
+    if total > limit and args.ask_first and sys.stdin.isatty():
         if input(f"This is longer than {limit} minutes. Continue? [y/N] ").strip().lower() not in ("y", "yes"):
             sys.exit("Stopped before training.")
 
@@ -115,7 +123,7 @@ def main():
         label = f"run {i}/{len(pending)}: {arm['name']} seed{seed}"
         outer.set_description(label)
         run_dir = out / "runs" / f"{arm['name']}_seed{seed}"
-        metrics = train_run(cfgs[arm["name"]], data, seed, run_dir, device, fresh=args.fresh, position_label=label)
+        metrics = train_run(cfgs[arm["name"]], data, seed, run_dir, device, fresh=not args.resume, position_label=label)
         row = result_row(cfgs[arm["name"]], seed, metrics)
         append_result(results_csv, row)
         status = "BLEW UP" if row["diverged"] else (f"next-step {row['one_step_rmse']:.3g}, "

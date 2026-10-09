@@ -29,7 +29,7 @@ evaluation:
   limit_cycle_start: [2.0, 0.0]
 
 run:
-  long_run_confirm_minutes: 30  # ask before starting if the estimate exceeds this (skipped with --yes)
+  long_run_confirm_minutes: 30  # ask before starting if the estimate exceeds this (skipped with --ask-first no)
 
 # Applied on top of everything when --quick is given. Code check only.
 quick:

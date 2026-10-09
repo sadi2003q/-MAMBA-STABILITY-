@@ -360,35 +360,58 @@ The project ran eight experimental phases before this restart. All results used 
 
 ## 12. Running the code (Kaggle)
 
-Every command uses the full path, so no change of folder is needed. Outputs go to `/kaggle/working/-MAMBA-STABILITY-/outputs/` (not tracked by git).
+Every command uses the full path, so no change of folder is needed. Outputs go to `/kaggle/working/-MAMBA-STABILITY-/outputs/` (not tracked by git). On/off options always take an explicit value, `yes` or `no`.
 
 ```bash
 # clone (or update an existing clone)
-!git clone https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- || git -C /kaggle/working/-MAMBA-STABILITY- pull
+!git clone https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- \
+    || git -C /kaggle/working/-MAMBA-STABILITY- pull
 
 # 0. mathematical checks (seconds, processor only)
 !python /kaggle/working/-MAMBA-STABILITY-/analysis/a01_augmented_jacobian_counterexample.py
 !python /kaggle/working/-MAMBA-STABILITY-/analysis/a02_vanderpol_jacobian_along_orbit.py
 
-# 1. architecture checks — must pass before any training
-!python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml
+# 1. architecture checks — must say "All checks passed"
+!python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml
 
 # 2. tiny end-to-end run (code check only — never interpret)
-!python /kaggle/working/-MAMBA-STABILITY-/train.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml --quick --yes
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml \
+    --quick yes
 
 # 3. the real single-seed run (prints a time estimate first)
-!python /kaggle/working/-MAMBA-STABILITY-/train.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml --seed 0 --yes
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml \
+    --seed 0 \
+    --quick no
 
 # 4. summary (also printed at the end of step 3) and figures
-!python /kaggle/working/-MAMBA-STABILITY-/summarize.py --experiment /kaggle/working/-MAMBA-STABILITY-/outputs/exp01_certificate_ablation
-!python /kaggle/working/-MAMBA-STABILITY-/tools/plot_results.py --experiment /kaggle/working/-MAMBA-STABILITY-/outputs/exp01_certificate_ablation
+!python /kaggle/working/-MAMBA-STABILITY-/summarize.py \
+    --experiment /kaggle/working/-MAMBA-STABILITY-/outputs/exp01_certificate_ablation
+!python /kaggle/working/-MAMBA-STABILITY-/tools/plot_results.py \
+    --experiment /kaggle/working/-MAMBA-STABILITY-/outputs/exp01_certificate_ablation
 
 # only if step 4 says "worth confirming": 8 seeds
-!python /kaggle/working/-MAMBA-STABILITY-/train.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml --seeds 0 1 2 3 4 5 6 7 --yes
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml \
+    --seeds 0 1 2 3 4 5 6 7 \
+    --quick no
 
 # tests
 !python -m pytest -q /kaggle/working/-MAMBA-STABILITY-/tests
 ```
 
-Useful flags for `train.py`: `--arms <names>` (run only some arms), `--device auto|cpu|cuda|mps`, `--fresh` (start over), `--quick`. Interrupted runs resume automatically. On the Mac, run the same commands from the repository folder with plain `python` and relative paths; set up once with `bash scripts/setup_env.sh`.
+Options of `train.py`:
 
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `--quick` | yes / no | no | tiny data and 2 epochs; checks that the code runs, never answers a question |
+| `--resume` | yes / no | yes | continue finished and interrupted runs; `no` starts over |
+| `--ask-first` | yes / no | yes | ask before a run longer than 30 minutes (never asked on Kaggle, where there is no keyboard input) |
+| `--estimate` | yes / no | yes | time a few batches per arm and print the expected run time |
+| `--seed` / `--seeds` | numbers | 0 | which seeds to run |
+| `--arms` | arm names | all | run only these arms |
+| `--device` | auto / cpu / cuda / mps | auto | where to train |
+
+On the Mac, run the same commands from the repository folder with plain `python` and relative paths; set up once with `bash scripts/setup_env.sh`.

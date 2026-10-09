@@ -5,6 +5,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NAME="${1:?usage: run_experiment.sh <experiment name>}"
 CONFIG="$ROOT/configs/experiments/$NAME.yaml"
-python "$ROOT/tools/check_model.py" --config "$CONFIG"
-python "$ROOT/train.py" --config "$CONFIG" --seed 0 --yes
-python "$ROOT/summarize.py" --experiment "$ROOT/outputs/$NAME"
+python "$ROOT/tools/check_model.py" \
+    --config "$CONFIG"
+python "$ROOT/train.py" \
+    --config "$CONFIG" \
+    --seed 0 \
+    --ask-first no
+python "$ROOT/summarize.py" \
+    --experiment "$ROOT/outputs/$NAME"
