@@ -1,0 +1,20 @@
+# Full Mamba block stack at Cevaal et al.'s Van der Pol scale (their Table 2: model dimension 8,
+# state dimension 8, kernel size 10, 6 layers; 3,418 parameters; expansion factor not reported).
+# Each layer: RMS normalisation -> input projection (two branches) -> depthwise causal convolution
+# -> SiLU -> selective state-space core -> multiply by SiLU of the gate branch -> output projection
+# -> residual connection.
+
+model:
+  name: mamba_full
+  d_model: 8
+  d_state: 8
+  d_conv: 10
+  n_layers: 6
+  expand: 1             # expansion 1 lands within about 5% of 3,418 parameters
+  dt_rank: 1
+  dt_min: 0.001
+  dt_max: 0.1
+  bias: true            # biases on input and output projections
+  decay_mode: certified
+  unstable_init_scale: 1.0
+  use_parallel_scan: true

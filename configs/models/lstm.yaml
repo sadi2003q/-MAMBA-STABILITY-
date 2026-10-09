@@ -1,0 +1,6 @@
+# Long Short-Term Memory network baseline, parameter-matched to Cevaal et al.'s 3,052.
+# Hidden size 25 with input [x1, x2, u, mask] and a 25 -> 2 readout gives 3,152 parameters.
+
+model:
+  name: lstm
+  hidden_size: 25

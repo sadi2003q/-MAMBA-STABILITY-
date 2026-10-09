@@ -76,9 +76,9 @@ $$x_{t+1} = f(x_t, u_t).$$
 
 Our main benchmark is the controlled Van der Pol oscillator, discretised with forward Euler and step $\Delta t$:
 
-$$\dot x_1 = x_2, \qquad \dot x_2 = \mu (1 - x_1^2)\,x_2 + u,$$
+$$\dot x_1 = x_2, \qquad \dot x_2 = \mu (1 - x_1^2)\,x_2 - x_1 + u,$$
 
-with $\mu = 1$, which produces a **limit cycle** (a closed loop that trajectories settle onto). This is the same benchmark used by Cevaal et al. (2026), so results are directly comparable.
+with $\mu = 1$, which produces a **limit cycle** (a closed loop that trajectories settle onto). This is the same benchmark used by Cevaal et al. (2026), so results are directly comparable. Cevaal et al. use a sampling time of 0.1 with forward Euler, a multisine input of peak amplitude 15 and 40,000 training samples; we match these. *(Correction, 9 October 2026: an earlier version of this brief, like Cevaal et al.'s printed Equation 31, omitted the $-x_1$ term. Without it there is no limit cycle, and under their input the simulation blows up; see `docs/decisions.md`.)*
 
 ### 3.2 The learned model: a selective state-space model
 
@@ -355,3 +355,40 @@ The project ran eight experimental phases before this restart. All results used 
 | **Mann–Whitney test** | A statistical test of whether one group of values tends to be larger than another |
 | **Cliff's delta** | An effect size from −1 to 1; magnitude above 0.33 is a medium-to-large effect |
 | **Seed** | The random starting point of a training run; more seeds show whether a result is reliable |
+
+---
+
+## 12. Running the code (Kaggle)
+
+Every command uses the full path, so no change of folder is needed. Outputs go to `/kaggle/working/-MAMBA-STABILITY-/outputs/` (not tracked by git).
+
+```bash
+# clone (or update an existing clone)
+!git clone https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- || git -C /kaggle/working/-MAMBA-STABILITY- pull
+
+# 0. mathematical checks (seconds, processor only)
+!python /kaggle/working/-MAMBA-STABILITY-/analysis/a01_augmented_jacobian_counterexample.py
+!python /kaggle/working/-MAMBA-STABILITY-/analysis/a02_vanderpol_jacobian_along_orbit.py
+
+# 1. architecture checks — must pass before any training
+!python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml
+
+# 2. tiny end-to-end run (code check only — never interpret)
+!python /kaggle/working/-MAMBA-STABILITY-/train.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml --quick --yes
+
+# 3. the real single-seed run (prints a time estimate first)
+!python /kaggle/working/-MAMBA-STABILITY-/train.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml --seed 0 --yes
+
+# 4. summary (also printed at the end of step 3) and figures
+!python /kaggle/working/-MAMBA-STABILITY-/summarize.py --experiment /kaggle/working/-MAMBA-STABILITY-/outputs/exp01_certificate_ablation
+!python /kaggle/working/-MAMBA-STABILITY-/tools/plot_results.py --experiment /kaggle/working/-MAMBA-STABILITY-/outputs/exp01_certificate_ablation
+
+# only if step 4 says "worth confirming": 8 seeds
+!python /kaggle/working/-MAMBA-STABILITY-/train.py --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01_certificate_ablation.yaml --seeds 0 1 2 3 4 5 6 7 --yes
+
+# tests
+!python -m pytest -q /kaggle/working/-MAMBA-STABILITY-/tests
+```
+
+Useful flags for `train.py`: `--arms <names>` (run only some arms), `--device auto|cpu|cuda|mps`, `--fresh` (start over), `--quick`. Interrupted runs resume automatically. On the Mac, run the same commands from the repository folder with plain `python` and relative paths; set up once with `bash scripts/setup_env.sh`.
+

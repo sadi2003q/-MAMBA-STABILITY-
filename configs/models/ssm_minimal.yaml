@@ -1,0 +1,16 @@
+# Minimal selective state-space cell: one layer, no convolution, no gating branch.
+# Used to isolate mechanisms. About 2,850 parameters (no published reference size).
+#   s_t = SiLU(W_in [x_t, u_t, mask_t])
+#   Delta_t = softplus(W_Delta s_t + b_Delta),  B_t = W_B s_t,  C_t = W_C s_t
+#   A_bar_t = exp(Delta_t * A),  h_t = A_bar_t * h_{t-1} + (Delta_t * s_t) B_t
+#   y_t = C_t . h_t + D * s_t,   x_{t+1} = x_t + W_out y_t
+
+model:
+  name: ssm_minimal
+  d_model: 32
+  d_state: 16
+  dt_min: 0.001         # initial range of the step size Delta (Mamba default)
+  dt_max: 0.1
+  decay_mode: certified # certified | free_sign | unstable_init
+  unstable_init_scale: 1.0
+  use_parallel_scan: true   # set false on an 8 GB machine if memory runs out

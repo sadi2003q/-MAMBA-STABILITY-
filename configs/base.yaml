@@ -1,0 +1,45 @@
+# Shared defaults for every experiment. Experiment configs inherit this file and
+# override only what differs. Paths are relative to the repository root.
+
+device: auto            # auto picks cuda -> mps -> cpu. Update after tools/benchmark_device.py
+output_root: outputs    # git-ignored; relative to the repository root unless absolute
+
+data:
+  context_len: 10       # true past states fed in before prediction starts (warms up the memory)
+  horizon: 50           # chained / direct prediction steps
+  window_stride: 5      # spacing between training windows cut from the long trajectories
+
+training:
+  epochs: 40            # first attempt: loss curves flattened by epoch 30-50
+  batch_size: 256
+  lr: 1.0e-3            # Adam, as in Cevaal et al. (2026)
+  weight_decay: 1.0e-5  # as in Cevaal et al.; not applied to decay parameters, biases or norms
+  lr_decay_gamma: 0.97  # learning rate multiplied by this after every epoch
+  grad_clip: 1.0
+  checkpoint_every: 5   # epochs between mid-run checkpoints (for resuming)
+  clamp_state: 50.0     # chained prediction clamp, in normalised units (about 50 standard deviations)
+  max_nonfinite_fraction: 0.5   # if more than this share of steps in an epoch is non-finite -> diverged
+  select_best_on_validation: true
+
+evaluation:
+  report_steps: [1, 10, 50]     # step 10 is Cevaal et al.'s horizon
+  max_eval_windows: 2000
+  jacobian_windows: 16          # windows used for the error-amplification diagnostic
+  limit_cycle_steps: 1000       # free-running test with zero input
+  limit_cycle_start: [2.0, 0.0]
+
+run:
+  long_run_confirm_minutes: 30  # ask before starting if the estimate exceeds this (skipped with --yes)
+
+# Applied on top of everything when --quick is given. Code check only.
+quick:
+  training:
+    epochs: 2
+    checkpoint_every: 1
+  data:
+    max_train_windows: 512
+    max_val_windows: 128
+  evaluation:
+    max_eval_windows: 128
+    jacobian_windows: 2
+    limit_cycle_steps: 200

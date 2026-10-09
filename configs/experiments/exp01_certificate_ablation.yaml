@@ -1,0 +1,131 @@
+name: exp01_certificate_ablation
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "If we remove the built-in stability guarantee, do predictions get worse?"
+hypothesis: >
+  H1: the latent certificate is binding — removing it (decay allowed either sign) changes
+  50-step prediction error by more than 20% under the same training regime.
+
+math_signal:
+  signal: NEGATIVE for H1 (we expect no difference)
+  what_was_checked: >
+    (1) a01: the certificate fixes only the determinant-like part of the augmented Jacobian; chained
+    stability depends on det(-(D + C (I - A_bar)^(-1) B)), which the certificate does not constrain.
+    (2) Gradient of the loss pushes decay towards negative values whenever memory growth hurts
+    the fit, so free-sign training is expected to stay negative (first attempt: it did).
+    (3) Unstable start: A_bar = exp(Delta * A) with A up to +16 and Delta up to 0.1 gives growth
+    up to exp(1.6) = 5 per step; over 60 steps that exceeds the float32 range, so the loss is
+    non-finite from the first batch.
+  prediction: >
+    free_sign within 20% of certified in every training regime; unstable_init diverges
+    in every training regime.
+  assumptions: >
+    trained models reach similar fits; linearisation of a01 is local; initial step sizes
+    drawn from [0.001, 0.1] as in Mamba.
+
+# Each arm: a model file, overrides, a training regime, a comparison group and a role.
+#   role: baseline (one per group) | ablation (compared to the group baseline) | reference (shown only)
+#   expected: the per-arm mathematical prediction, checked by summarize.py
+arms:
+  # ---- teacher forcing (always fed the true previous state during training)
+  - name: certified_teacher
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: baseline
+    why: the latent certificate on (decay forced negative), standard training
+  - name: free_sign_teacher
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: ablation
+    expected: same
+    why: certificate removed, same starting values — does training need the constraint?
+  - name: unstable_init_teacher
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: unstable_init}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: ablation
+    expected: diverges
+    why: certificate removed and memory starts growing — does the guarantee matter at the start?
+
+  # ---- chained-prediction training (fed its own predictions over the 50-step horizon)
+  - name: certified_chained
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: chained
+    group: chained
+    role: baseline
+    why: certificate on, trained on its own chained predictions
+  - name: free_sign_chained
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: chained
+    group: chained
+    role: ablation
+    expected: same
+    why: certificate removed under rollout-aware training
+  - name: unstable_init_chained
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: unstable_init}}
+    training_regime: chained
+    group: chained
+    role: ablation
+    expected: diverges
+    why: unstable start under rollout-aware training
+
+  # ---- direct multi-step (whole horizon in one pass from future inputs; predictions never fed back)
+  - name: certified_direct
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: direct
+    group: direct
+    role: baseline
+    why: certificate on, Cevaal-style direct multi-step prediction
+  - name: free_sign_direct
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: direct
+    group: direct
+    role: ablation
+    expected: same
+    why: certificate removed in the regime where the hidden state is the only memory path
+  - name: unstable_init_direct
+    model: ../models/ssm_minimal.yaml
+    overrides: {model: {decay_mode: unstable_init}}
+    training_regime: direct
+    group: direct
+    role: ablation
+    expected: diverges
+    why: unstable start, direct regime
+
+  # ---- reference: parameter-matched Long Short-Term Memory network (no certificate at all)
+  - name: lstm_teacher
+    model: ../models/lstm.yaml
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: reference
+    why: is a certificate-free recurrent network any worse?
+  - name: lstm_chained
+    model: ../models/lstm.yaml
+    training_regime: chained
+    group: chained
+    role: reference
+    why: same, under chained-prediction training
+  - name: lstm_direct
+    model: ../models/lstm.yaml
+    training_regime: direct
+    group: direct
+    role: reference
+    why: same, direct multi-step
+
+decision_rule:
+  type: ablation
+  metric: rollout_rmse          # root-mean-square error averaged over the 50 prediction steps
+  threshold_percent: 20         # Stage 1: worth confirming if any ablation arm differs by more than this
+  # Stage 2 (8+ seeds) for a null result: free_sign / certified error ratio must have its bootstrap
+  # 95% interval inside [0.9, 1.1] (plan.md, Step 7N). Diverged arms are reported as counts, never errors.
+  equivalence_margin_percent: 10

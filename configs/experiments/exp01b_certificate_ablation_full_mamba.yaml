@@ -1,0 +1,69 @@
+name: exp01b_certificate_ablation_full_mamba
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Does removing the stability guarantee matter in the full Mamba architecture?"
+hypothesis: >
+  H1 on the full architecture: removing the latent certificate changes 50-step prediction error
+  by more than 20% under the same training regime.
+
+math_signal:
+  signal: NEGATIVE for H1 (we expect no difference)
+  what_was_checked: >
+    Same argument as exp01 (a01 augmented-Jacobian condition; gradient keeps decay negative).
+    The full block adds a convolution and a gate before and after the core, which a01 absorbs
+    into the effective B, C and D terms, so the certificate still does not reach the condition.
+  prediction: free_sign within 20% of certified in every regime.
+  assumptions: as exp01.
+
+arms:
+  - name: certified_teacher
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: baseline
+    why: certificate on, full architecture, teacher forcing
+  - name: free_sign_teacher
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: ablation
+    expected: same
+    why: certificate removed, full architecture
+  - name: certified_chained
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: chained
+    group: chained
+    role: baseline
+    why: certificate on, chained-prediction training
+  - name: free_sign_chained
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: chained
+    group: chained
+    role: ablation
+    expected: same
+    why: certificate removed, chained-prediction training
+  - name: certified_direct
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: direct
+    group: direct
+    role: baseline
+    why: certificate on, Cevaal-style direct multi-step
+  - name: free_sign_direct
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: direct
+    group: direct
+    role: ablation
+    expected: same
+    why: certificate removed, direct multi-step
+
+decision_rule:
+  type: ablation
+  metric: rollout_rmse
+  threshold_percent: 20
+  equivalence_margin_percent: 10

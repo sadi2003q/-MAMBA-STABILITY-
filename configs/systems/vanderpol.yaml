@@ -1,0 +1,29 @@
+# Controlled Van der Pol oscillator, matched to Cevaal, de Jong and Lazar (2026), Section on Van der Pol:
+# mu = 1, sampling time 0.1, forward Euler, multisine input with peak amplitude 15, 40,000 training samples.
+# Their printed equation omits "- x1"; with that form and this input the simulation blows up within a few
+# hundred steps, so we use the standard form (see docs/decisions.md, 9 October 2026).
+#
+#   dx1/dt = x2
+#   dx2/dt = mu (1 - x1^2) x2 - x1 + u
+
+system:
+  name: vanderpol
+  mu: 1.0
+  dt: 0.1
+  include_minus_x1: true
+  state_names: [position, velocity]
+
+data:
+  input_signal: multisine
+  multisine:
+    f_min: 0.0049       # hertz
+    f_max: 4.88         # hertz (Nyquist frequency at dt = 0.1 is 5)
+    harmonics: 30
+    peak: 15.0
+    spacing: linear     # log spacing with peak 15 blows up the Euler simulation (checked 9 October 2026)
+  train_samples: 40000
+  val_samples: 10000
+  test_samples: 10000
+  initial_state_low: [-2.5, -2.0]    # Cevaal et al.'s evaluation range
+  initial_state_high: [2.5, 2.0]
+  data_seed: 12345      # data are identical across model seeds

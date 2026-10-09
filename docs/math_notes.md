@@ -51,7 +51,7 @@ Implication:         the negative half of the paper (H2) has a clean proof sketc
 
 **Script:** `analysis/a02_vanderpol_jacobian_along_orbit.py` (NumPy, SciPy, Matplotlib; a few seconds). Arguments: `--mu`, `--dts`, `--horizon`.
 
-**Correction to the research brief.** Section 3.1 of the brief writes dx2/dt = mu (1 - x1^2) x2 + u. The standard Van der Pol oscillator, and the only form with a limit cycle, is dx2/dt = mu (1 - x1^2) x2 - x1 + u. Without "- x1", every point with x2 = 0 is an equilibrium and nothing oscillates. The scripts use the standard form; the brief and the system config should be fixed to match.
+**Correction to the research brief.** Section 3.1 of the brief writes dx2/dt = mu (1 - x1^2) x2 + u. The standard Van der Pol oscillator, and the only form with a limit cycle, is dx2/dt = mu (1 - x1^2) x2 - x1 + u. Without "- x1", every point with x2 = 0 is an equilibrium and nothing oscillates. The scripts use the standard form; the brief and the system config should be fixed to match. *(Update, same day: the brief is fixed. Cevaal et al.'s own Equation 31 prints the same form without "- x1"; under their multisine input, peak 15, that form blows up within 211 to 950 Euler steps in 10 of 10 trials, so it must be a typo. Details in `docs/decisions.md`.)*
 
 **Continuous cycle (mu = 1).** Period 6.6633, amplitude about 2.009. Floquet multipliers (how a perturbation changes after one full period): 1.000 and 8.6e-4. Timing errors are kept forever; shape errors die out. This is transverse contraction.
 
