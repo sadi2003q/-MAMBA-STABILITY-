@@ -1,6 +1,6 @@
 # Roadmap — Does Mamba's Stability Guarantee Make a Controller Safe?
 
-**Owner:** Md. Adnan Abdullah Sadi · **Started:** 9 October 2026 · **Brief:** `README.md` · **Rules:** `CLAUDE.md`
+**Owner:** Md. Adnan Abdullah Sadi · **Started:** 9 October 2026 · **Brief:** `README.md` · **Rules:** `CLAUDE.md` 
 
 **In one line:** Mamba's internal memory is proven stable (the "locked dial"). We test whether that makes its *predictions* — the thing a controller uses — stable too (the "room temperature"). Either answer is a paper.
 
