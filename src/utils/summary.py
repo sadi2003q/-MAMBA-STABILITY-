@@ -107,6 +107,12 @@ def build_summary(exp_cfg: dict, rows: list[dict], quick: bool = False) -> tuple
         bullets = []
         ordered = [base_name] + [n for n in names if n != base_name]
         machine["groups"][group] = {}
+        # Remember how much the baseline's error grows from step 1 to step 50 (used by short_summary)
+        machine.setdefault("baseline_growth", {})
+        if base["row"] is not None and base["diverged"] < base["runs"]:
+            machine["baseline_growth"][group] = base["growth"]
+        else:
+            machine["baseline_growth"][group] = None
         for name in ordered:
             a = agg(name)
             if a["row"] is None:
@@ -217,5 +223,121 @@ def build_summary(exp_cfg: dict, rows: list[dict], quick: bool = False) -> tuple
         decision = "Stage 2 complete — see 'Across seeds' above. Stage 1 rule: " + decision
     lines.append(f"Decision: {decision}")
     machine["decision"] = decision
+    machine["name"] = exp_cfg["name"]
+    machine["seed_note"] = seed_note
+    machine["quick"] = quick
     machine["agreements"] = [{"arm": a[0], "group": a[1], "expected": a[2], "agreed": a[3]} for a in agreements]
     return "\n".join(lines) + "\n", machine
+
+
+# ---------------------------------------------------------------------------------------------
+# Short version for the screen. The full text above is saved in summary.md.
+# ---------------------------------------------------------------------------------------------
+
+SHORT_GROUP_TITLES = {
+    "teacher_forcing": "Trained on true states (teacher forcing)",
+    "chained": "Trained on its own predictions (chained)",
+    "direct": "Whole horizon at once (direct multi-step)",
+}
+
+
+def _short_number(value) -> str:
+    """Three significant digits, or a dash when there is no number."""
+    if value is None:
+        return "—"
+    if not np.isfinite(value):
+        return "—"
+    return f"{value:.3g}"
+
+
+def _short_change(entry: dict) -> str:
+    """Change of the 50-step error against the baseline, e.g. '+3% same' or '-35% clearly better'."""
+    # Step 1: the baseline itself has no change
+    if entry["role"] == "baseline":
+        return "—"
+
+    # Step 2: a run that blew up has no error to compare
+    if entry["diverged"] == entry["runs"]:
+        return "—"
+
+    # Step 3: percentage with a short word
+    pct = entry.get("percent_vs_baseline")
+    if pct is None:
+        return "—"
+    size = abs(pct)
+    if size <= 10:
+        label = "same"
+    elif pct < 0:
+        label = "better"
+    else:
+        label = "worse"
+    if 10 < size <= 20:
+        label = "slightly " + label
+    if size > 20:
+        label = "clearly " + label
+    return f"{pct:+.0f}% {label}"
+
+
+def _short_blew_up(entry: dict) -> str:
+    """'yes' / 'no' for one seed, or '2 of 8' for several."""
+    if entry["runs"] == 1:
+        if entry["diverged"]:
+            return "yes"
+        return "no"
+    return f"{entry['diverged']} of {entry['runs']}"
+
+
+def short_summary(machine: dict, full_summary_path=None) -> str:
+    """A compact result for the screen: one table per training regime, then the decision."""
+    lines = []
+
+    # Step 1: title
+    if machine.get("quick"):
+        lines.append("CODE CHECK ONLY — do not interpret these numbers (--quick run)")
+    lines.append(f"RESULT — {machine['name']}   ({machine['seed_note']})")
+    lines.append("Smaller error is better. 'Change' = 50-step error compared with the baseline above it.")
+
+    # Step 2: one small table per group
+    header = f"  {'':44s}{'Next-step':>10s}{'50-step':>10s}   {'Change':22s}{'Blew up?':>8s}"
+    for group, entries in machine["groups"].items():
+        lines.append("")
+        title = SHORT_GROUP_TITLES.get(group, group)
+        lines.append(title)
+        lines.append(header)
+        for name, entry in entries.items():
+            all_blew_up = entry["diverged"] == entry["runs"]
+            if all_blew_up:
+                one_step_text = "—"
+                rollout_text = "—"
+            else:
+                one_step_text = _short_number(entry["one_step"])
+                rollout_text = _short_number(entry["rollout"])
+            change_text = _short_change(entry)
+            blew_text = _short_blew_up(entry)
+            label = entry["label"][:44]
+            lines.append(f"  {label:44s}{one_step_text:>10s}{rollout_text:>10s}   {change_text:22s}{blew_text:>8s}")
+
+        # Step 3: how much the baseline's error grows over 50 steps
+        growth = machine.get("baseline_growth", {}).get(group)
+        if growth is not None:
+            lines.append(f"  Baseline error grows about {growth:.0f}x from step 1 to step 50.")
+
+    # Step 4: did the mathematical prediction hold?
+    lines.append("")
+    agreements = machine.get("agreements", [])
+    not_held = []
+    for a in agreements:
+        if a["agreed"] is not True:
+            not_held.append(f"{a['arm']} ({a['group']})")
+    if not agreements:
+        lines.append("Math prediction: nothing to check.")
+    elif not not_held:
+        lines.append("Math prediction: held for every arm.")
+    else:
+        lines.append("Math prediction: did NOT hold (or could not be checked) for " + ", ".join(not_held) + ".")
+
+    # Step 5: the decision, and where the full summary is
+    lines.append(f"Decision: {machine['decision']}")
+    if full_summary_path is not None:
+        lines.append(f"Full summary: {full_summary_path}")
+    return "\n".join(lines)

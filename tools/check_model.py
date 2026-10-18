@@ -7,6 +7,9 @@ For every arm of the experiment:
   4. certificate status at initialisation (all decay values negative?);
   5. components listed under an arm's `new_components` are not exactly zero at the first time step.
 
+On screen: one progress bar, the parameter count of each model type, and the verdict.
+Every number of every check goes to outputs/<experiment>/check_log.txt.
+
 python tools/check_model.py --config configs/experiments/exp01_certificate_ablation.yaml
 """
 
@@ -26,13 +29,15 @@ import torch  # noqa: E402
 from src.data.datasets import build_data  # noqa: E402
 from src.losses.regimes import regime_loss  # noqa: E402
 from src.models.registry import REFERENCE_PARAMETERS, build_model, count_parameters  # noqa: E402
-from src.utils.config import deep_merge, load_experiment, resolve_arm  # noqa: E402
+from src.utils.config import deep_merge, load_experiment, output_dir, resolve_arm  # noqa: E402
+from src.utils.console import ConsoleLog, progress_bar  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
 
 TOL = 1e-4
 
 
 def rel_diff(a, b) -> float:
+    """Largest difference between two outputs, relative to the size of b."""
     if not (torch.isfinite(a).all() and torch.isfinite(b).all()):
         same_pattern = torch.equal(torch.isfinite(a), torch.isfinite(b))
         if not same_pattern:
@@ -44,108 +49,159 @@ def rel_diff(a, b) -> float:
     return float((a - b).abs().max() / max(1.0, float(b.abs().max())))
 
 
-def check_arm(arm, cfg, data) -> list[str]:
+def check_arm(arm, cfg, data, log) -> tuple[list[str], dict]:
+    """Run the five checks for one arm.
+
+    Returns
+      failures : list of short failure messages (empty = all passed)
+      info     : facts shown on screen (parameter count, expected non-finite loss)
+    """
     failures = []
     name = arm["name"]
     expected_diverge = arm.get("expected") == "diverges"
+    info = {"model": cfg["model"]["name"], "expected_nonfinite": False}
+
     set_seed(0)
     model = build_model(cfg).double()     # double precision on the processor for the equivalence check
     core = model.core
-    n_par = count_parameters(model)
-    ref = REFERENCE_PARAMETERS.get(cfg["model"]["name"])
-    ref_s = f"reference {ref:,} ({100 * (n_par - ref) / ref:+.1f}%)" if ref else "no published reference"
-    print(f"\n[{name}]  model {cfg['model']['name']}, regime {cfg['training']['regime']}, "
-          f"decay {cfg['model'].get('decay_mode', '—')}")
-    print(f"  1. parameters: {n_par:,}   {ref_s}")
 
-    # 2. equivalence
-    T = 8 if cfg["model"].get("decay_mode") == "unstable_init" else data["context_len"] + data["horizon"]
+    # ---- 1. parameter count ----
+    n_par = count_parameters(model)
+    info["parameters"] = n_par
+    log.detail("")
+    log.detail(f"[{name}]  model {cfg['model']['name']}, regime {cfg['training']['regime']}, "
+               f"decay {cfg['model'].get('decay_mode', '—')}")
+    log.detail(f"  1. parameters: {n_par:,}")
+
+    # ---- 2. the three ways of running the model must give the same output ----
+    if cfg["model"].get("decay_mode") == "unstable_init":
+        T = 8      # short sequence: an unstable model overflows on long ones
+    else:
+        T = data["context_len"] + data["horizon"]
     g = torch.Generator().manual_seed(1)
     inp = torch.randn(4, T, model.in_dim(model.n_x, model.n_u), generator=g, dtype=torch.float64)
     with torch.no_grad():
+        # (a) parallel scan, (b) plain loop, (c) one step at a time
         y_par, _ = core.sequence(inp, parallel=True)
         y_seq, _ = core.sequence(inp, parallel=False)
-        state, ys = None, []
+        state = None
+        ys = []
         for t in range(T):
             y, state = core.step(inp[:, t], state)
             ys.append(y)
         y_step = torch.stack(ys, dim=1)
-        # continuing from a carried state must match one long pass (tests the warm-up hand-over)
+        # (d) run the first half, then continue from the carried memory
         k = T // 2
         _, st = core.sequence(inp[:, :k], parallel=True)
         y_cont, _ = core.sequence(inp[:, k:], st, parallel=True)
-    d1, d2, d3 = rel_diff(y_par, y_seq), rel_diff(y_par, y_step), rel_diff(y_par[:, k:], y_cont)
-    ok = d1 <= TOL and d2 <= TOL and d3 <= TOL
-    print(f"  2. parallel vs loop {d1:.2e} | parallel vs step-by-step {d2:.2e} | split-and-continue {d3:.2e}"
-          f"  (T = {T})  {'pass' if ok else 'FAIL'}")
-    if not ok:
-        failures.append(f"{name}: forward passes disagree (> {TOL})")
+    d1 = rel_diff(y_par, y_seq)
+    d2 = rel_diff(y_par, y_step)
+    d3 = rel_diff(y_par[:, k:], y_cont)
+    same_output = d1 <= TOL and d2 <= TOL and d3 <= TOL
+    if same_output:
+        verdict = "pass"
+    else:
+        verdict = "FAIL"
+    log.detail(f"  2. parallel vs loop {d1:.2e} | parallel vs step-by-step {d2:.2e} | "
+               f"split-and-continue {d3:.2e}  (T = {T})  {verdict}")
+    if not same_output:
+        failures.append(f"{name}: the parallel and step-by-step outputs disagree (more than {TOL})")
 
-    # 3. gradient reach, float32, real windows, the arm's own loss
+    # ---- 3. every parameter must receive gradient ----
     set_seed(0)
     model32 = build_model(cfg)
     model32.train()
     split = data["splits"]["train"]
-    x, u = split.xw[:16], split.uw[:16]
+    x = split.xw[:16]
+    u = split.uw[:16]
     loss, _ = regime_loss(model32, x, u, cfg["training"]["regime"], data["context_len"], data["horizon"])
     if not torch.isfinite(loss):
-        msg = f"  3. loss at initialisation is not finite ({float(loss)})"
         if expected_diverge:
-            print(msg + " — expected for an unstable start; recorded, not a failure")
+            info["expected_nonfinite"] = True
+            log.detail(f"  3. loss at initialisation is not finite ({float(loss)}) — expected for an unstable start")
         else:
-            print(msg + "  FAIL")
-            failures.append(f"{name}: non-finite loss at initialisation")
+            log.detail(f"  3. loss at initialisation is not finite ({float(loss)})  FAIL")
+            failures.append(f"{name}: loss is not finite at the start")
     else:
         loss.backward()
-        norms = {n: (float(p.grad.norm()) if p.grad is not None else 0.0) for n, p in model32.named_parameters()}
-        dead = [n for n, v in norms.items() if v == 0.0]
-        bad = [n for n, v in norms.items() if not torch.isfinite(torch.tensor(v))]
+        norms = {}
+        for param_name, param in model32.named_parameters():
+            if param.grad is None:
+                norms[param_name] = 0.0
+            else:
+                norms[param_name] = float(param.grad.norm())
+        dead = []
+        bad = []
+        for param_name, value in norms.items():
+            if value == 0.0:
+                dead.append(param_name)
+            if not torch.isfinite(torch.tensor(value)):
+                bad.append(param_name)
         smallest = sorted(norms.items(), key=lambda kv: kv[1])[:3]
-        healthy = not dead and not bad
-        verdict = "pass" if healthy else ("expected for an unstable start; recorded, not a failure"
-                                          if expected_diverge else "FAIL")
-        print(f"  3. loss {float(loss):.3e}; gradient norms: min {min(norms.values()):.2e}, "
-              f"max {max(norms.values()):.2e}; smallest: " + ", ".join(f"{n} {v:.2e}" for n, v in smallest)
-              + f"  {verdict}")
+        smallest_text = ", ".join(f"{n} {v:.2e}" for n, v in smallest)
+        log.detail(f"  3. loss {float(loss):.3e}; gradient norms min {min(norms.values()):.2e}, "
+                   f"max {max(norms.values()):.2e}; smallest: {smallest_text}")
         if not expected_diverge:
             if dead:
                 failures.append(f"{name}: zero gradient for {', '.join(dead)}")
             if bad:
                 failures.append(f"{name}: non-finite gradient for {', '.join(bad)}")
 
-    # 4. certificate status
+    # ---- 4. is the stability guarantee in place at the start? ----
     mods = model32.decay_modules()
     if mods:
-        mx = max(float(m.A().max()) for m in mods)
-        holds = mx < 0
+        largest_decay = max(float(m.A().max()) for m in mods)
+        holds = largest_decay < 0
+        log.detail(f"  4. largest decay value {largest_decay:+.3g} → certificate "
+                   f"{'holds' if holds else 'does NOT hold'} at start")
         mode = cfg["model"].get("decay_mode")
-        print(f"  4. largest decay value {mx:+.3g} → certificate {'holds' if holds else 'does NOT hold'} at start "
-              f"(decay factor exp(step * decay) is {'below' if holds else 'not below'} 1)")
         if mode in ("certified", "free_sign") and not holds:
-            failures.append(f"{name}: decay should start negative")
+            failures.append(f"{name}: decay values should start negative")
         if mode == "unstable_init" and holds:
-            failures.append(f"{name}: unstable start should have positive decay values")
+            failures.append(f"{name}: an unstable start should have positive decay values")
     else:
-        print("  4. no decay parameter (no certificate in this model)")
+        log.detail("  4. no decay parameter (no certificate in this model)")
 
-    # 5. new components
+    # ---- 5. new components must not be exactly zero at the first step ----
     new = arm.get("new_components") or []
     if not new:
-        print("  5. no new components declared — not applicable")
+        log.detail("  5. no new components declared — not applicable")
     else:
         acts = {}
-        hooks = [dict(model32.named_modules())[n].register_forward_hook(
-            lambda m, i, o, n=n: acts.setdefault(n, o if torch.is_tensor(o) else o[0])) for n in new]
+        modules = dict(model32.named_modules())
+        hooks = []
+        for comp in new:
+            hook = modules[comp].register_forward_hook(
+                lambda m, i, o, n=comp: acts.setdefault(n, o if torch.is_tensor(o) else o[0]))
+            hooks.append(hook)
         with torch.no_grad():
             model32.teacher_forced(x[:, :1], u[:, :1])
-        for h in hooks:
-            h.remove()
-        for n in new:
-            zero = n in acts and float(acts[n].abs().max()) == 0.0
-            print(f"  5. {n}: {'exactly ZERO at the first step  FAIL' if zero else 'non-zero at the first step  pass'}")
+        for hook in hooks:
+            hook.remove()
+        for comp in new:
+            zero = comp in acts and float(acts[comp].abs().max()) == 0.0
             if zero:
-                failures.append(f"{name}: new component {n} is zero at the first step")
-    return failures
+                log.detail(f"  5. {comp}: exactly ZERO at the first step  FAIL")
+                failures.append(f"{name}: new component {comp} is zero at the first step")
+            else:
+                log.detail(f"  5. {comp}: non-zero at the first step  pass")
+
+    if failures:
+        log.detail("  → FAILED")
+    else:
+        log.detail("  → all checks passed")
+    return failures, info
+
+
+def parameter_line(model_name: str, n_parameters: int) -> str:
+    """e.g. '  lstm          3,152 parameters  (Cevaal et al.: 3,052, +3.3%)'."""
+    reference = REFERENCE_PARAMETERS.get(model_name)
+    if reference:
+        percent = 100.0 * (n_parameters - reference) / reference
+        reference_text = f"(Cevaal et al.: {reference:,}, {percent:+.1f}%)"
+    else:
+        reference_text = "(no published reference)"
+    return f"  {model_name:13s}{n_parameters:>7,d} parameters  {reference_text}"
 
 
 def main():
@@ -153,22 +209,57 @@ def main():
     p.add_argument("--config", required=True)
     p.add_argument("--arms", nargs="+")
     args = p.parse_args()
+
+    # Step 1: read the experiment and pick the arms
     exp = load_experiment(args.config)
-    arms = [a for a in exp["arms"] if not args.arms or a["name"] in args.arms]
-    # small data are enough for the checks
+    arms = []
+    for arm in exp["arms"]:
+        if not args.arms or arm["name"] in args.arms:
+            arms.append(arm)
+
+    # Step 2: log file (overwritten every time, so it always holds the latest check)
+    out = output_dir(exp, quick=False)
+    log = ConsoleLog(out / "check_log.txt", fresh=True)
+    log.capture_warnings()
+    log.say(f"Architecture checks — {exp['name']} ({len(arms)} arms)")
+
+    # Step 3: a small amount of data is enough for the checks
     first = resolve_arm(exp, arms[0])
-    data = build_data(deep_merge(first, {"data": {"max_train_windows": 64, "max_val_windows": 16},
-                                         "evaluation": {"max_eval_windows": 16}}))
+    small = deep_merge(first, {"data": {"max_train_windows": 64, "max_val_windows": 16},
+                               "evaluation": {"max_eval_windows": 16}})
+    data = build_data(small)
+
+    # Step 4: check every arm (one progress bar)
     failures = []
+    parameters_by_model = {}
+    expected_nonfinite_arms = []
+    bar = progress_bar(total=len(arms), description="checking", unit="arm")
     for arm in arms:
-        failures += check_arm(arm, resolve_arm(exp, arm), data)
-    print("\n" + "=" * 80)
+        arm_failures, info = check_arm(arm, resolve_arm(exp, arm), data, log)
+        failures = failures + arm_failures
+        parameters_by_model[info["model"]] = info["parameters"]
+        if info["expected_nonfinite"]:
+            expected_nonfinite_arms.append(arm["name"])
+        bar.update(1)
+    bar.close()
+
+    # Step 5: short report on screen
+    for model_name, n_parameters in parameters_by_model.items():
+        log.say(parameter_line(model_name, n_parameters))
+    if expected_nonfinite_arms:
+        log.say(f"  note: {len(expected_nonfinite_arms)} unstable-start arm(s) have a non-finite loss "
+                f"at the start — expected, not a failure")
+
     if failures:
-        print("CHECKS FAILED — do not train until these are fixed:")
-        for f in failures:
-            print(f"  • {f}")
+        log.say("CHECKS FAILED — do not train until these are fixed:")
+        for message in failures:
+            log.say(f"  ✗ {message}")
+        log.say(f"Full details: {log.path}")
+        log.close()
         sys.exit(1)
-    print(f"All checks passed for {len(arms)} arm(s).")
+
+    log.say(f"All checks passed for {len(arms)} arm(s).   Full details: {log.path}")
+    log.close()
 
 
 if __name__ == "__main__":

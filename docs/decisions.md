@@ -19,3 +19,10 @@ Dated record of what was decided and why. Newest last.
 - **Primary metric.** Root-mean-square error averaged over the 50 prediction steps, physical units, both state components (`rollout_rmse`). Next-step error = error at prediction step 1 in the same regime. Diverged runs are reported as counts.
 - **Decision rule for exp01.** Ablation rule (any trained ablation arm more than 20% from its baseline in the same training regime). Blown-up arms are reported as counts and do not count towards "worth confirming". For a null result at Stage 2, the free-sign / certified error ratio must have its bootstrap 95% interval inside [0.9, 1.1] (plan.md, Step 7N).
 - **exp01b** runs the same ablation on the full Mamba architecture as a separate experiment, so the minimal-cell result can be read before spending the longer full-Mamba time.
+
+## 18 October 2026 — Short screen output, full details in log files
+
+- The screen output was too long to read (a 12-row arm table, nested progress bars that spill over many lines in Kaggle cells, repeated PyTorch warnings, about 75 lines from the architecture checks).
+- New rule: the screen shows progress bars and key numbers only; everything else goes to `outputs/<experiment>/log.txt`, `check_log.txt` or `benchmark_log.txt`. Warnings are counted on screen and saved in the log file.
+- `train.py`: three header lines, one progress bar per run, one line per finished run, then a short result table (`short_summary` in `src/utils/summary.py`). The full summary is unchanged and still saved to `summary.md`.
+- No change to training, evaluation or results — output only.

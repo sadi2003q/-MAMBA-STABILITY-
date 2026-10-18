@@ -9,13 +9,13 @@ import time
 from pathlib import Path
 
 import torch
-from tqdm.auto import tqdm
 
 from src.evaluation.diagnostics import certificate_status, error_amplification, limit_cycle
 from src.evaluation.metrics import rollout_errors, teacher_forced_one_step
 from src.losses.regimes import regime_loss
 from src.models.registry import build_model, count_parameters
 from src.utils.config import save_yaml
+from src.utils.console import progress_bar
 from src.utils.io import save_json, write_train_log
 from src.utils.seed import set_seed
 
@@ -83,7 +83,8 @@ def time_batches(cfg: dict, data: dict, device, n_batches: int = 3) -> float:
 
 
 def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bool = False,
-              position_label: str = "") -> dict:
+              position_label: str = "", log=None) -> dict:
+    """Train one (arm, seed) run. `log` is an optional ConsoleLog for the details file."""
     run_dir.mkdir(parents=True, exist_ok=True)
     save_yaml({k: v for k, v in cfg.items() if not k.startswith("_")}, run_dir / "config.yaml")
     t_cfg = cfg["training"]
@@ -110,14 +111,17 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
         best_val, best_state = ck["best_val"], ck["best_state"]
         nonfinite_total, diverged = ck["nonfinite_total"], ck["diverged"]
         train_seconds = ck.get("train_seconds", 0.0)
-        tqdm.write(f"  resuming {position_label} from epoch {start_epoch}")
+        # The resume message goes to the log file only (the progress bar already shows the epoch)
+        if log is not None:
+            log.detail(f"resuming {position_label} from epoch {start_epoch}")
 
     split = data["splits"]["train"]
     n_train = split.xw.shape[0]
     epochs = int(t_cfg["epochs"])
-    bar = tqdm(range(start_epoch, epochs), desc=f"  {position_label}", unit="epoch", leave=False,
-               initial=start_epoch, total=epochs)
-    for epoch in bar:
+
+    # One progress bar per run, e.g. "run 3/12 certified_chained seed0 | 18/40 epochs"
+    bar = progress_bar(total=epochs, description=position_label, unit="epoch", already_done=start_epoch)
+    for epoch in range(start_epoch, epochs):
         if diverged:
             break
         t0 = time.time()
@@ -152,7 +156,12 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
         log_rows.append({"epoch": epoch + 1, "train_loss": train_loss, "val_loss": val,
                          "lr": opt.param_groups[0]["lr"], "nonfinite_steps": nonfinite,
                          "seconds": round(time.time() - t0, 2)})
-        bar.set_postfix(loss=f"{train_loss:.3e}", val=f"{val:.3e}", bad=nonfinite)
+        # Show only the two loss numbers on the bar; the full row is saved in train_log.csv
+        bar.set_postfix(loss=f"{train_loss:.2e}", val=f"{val:.2e}")
+        bar.update(1)
+        if log is not None:
+            log.detail(f"{position_label} epoch {epoch + 1}: train loss {train_loss:.4e}, "
+                       f"validation loss {val:.4e}, non-finite steps {nonfinite}")
         if (epoch + 1) % int(t_cfg["checkpoint_every"]) == 0 or epoch + 1 == epochs or diverged:
             torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(),
                         "scheduler": sched.state_dict(), "generator": gen.get_state(), "epoch": epoch + 1,

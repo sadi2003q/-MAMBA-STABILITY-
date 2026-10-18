@@ -18,16 +18,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import argparse  # noqa: E402
 
 import torch  # noqa: E402
-from tqdm.auto import tqdm  # noqa: E402
 
 from src.data.datasets import build_data  # noqa: E402
 from src.models.registry import build_model, count_parameters  # noqa: E402
 from src.training.trainer import evaluate_model, result_row  # noqa: E402
 from src.utils.cli import add_yes_no  # noqa: E402
 from src.utils.config import load_experiment, output_dir, resolve_arm  # noqa: E402
+from src.utils.console import ConsoleLog, progress_bar  # noqa: E402
 from src.utils.device import pick_device  # noqa: E402
 from src.utils.io import append_result, load_json, save_json  # noqa: E402
-from src.utils.summary import build_summary, read_results  # noqa: E402
+from src.utils.summary import build_summary, read_results, short_summary  # noqa: E402
 
 
 def main():
@@ -49,11 +49,21 @@ def main():
     new_csv = out / "results.csv.new"
     if new_csv.exists():
         new_csv.unlink()
-    for run_dir in tqdm(run_dirs, desc="re-evaluating"):
+
+    # Details go to the log file; the screen shows one progress bar and the short result
+    log = ConsoleLog(out / "log.txt")
+    log.capture_warnings()
+    log.say(f"Re-evaluating {len(run_dirs)} saved runs of {exp['name']}   full details: {log.path}")
+    skipped = 0
+    bar = progress_bar(total=len(run_dirs), description="re-evaluating", unit="run")
+    for run_dir in run_dirs:
+        bar.update(1)
         name, seed = run_dir.name.rsplit("_seed", 1)
         if name not in cfgs or not (run_dir / "checkpoint.pt").exists():
-            tqdm.write(f"  skipping {run_dir.name} (unknown arm or no final checkpoint)")
+            log.detail(f"skipping {run_dir.name} (unknown arm or no final checkpoint)")
+            skipped = skipped + 1
             continue
+        log.detail(f"re-evaluated {run_dir.name}")
         cfg = cfgs[name]
         model = build_model(cfg).to(device)
         model.load_state_dict(torch.load(run_dir / "checkpoint.pt", map_location=device, weights_only=False)["model"])
@@ -65,12 +75,17 @@ def main():
         metrics["diverged"] = bool(metrics["training"].get("diverged_during_training") or metrics["primary"]["diverged"])
         save_json(metrics, run_dir / "metrics.json")
         append_result(new_csv, result_row(cfg, int(seed), metrics))
+    bar.close()
+    if skipped > 0:
+        log.say(f"  {skipped} run folder(s) skipped (see the log file)")
     new_csv.replace(out / "results.csv")
     exp_clean = {k: v for k, v in exp.items() if not k.startswith("_")}
     text, machine = build_summary(exp_clean, read_results(out / "results.csv"), quick=args.quick)
     (out / "summary.md").write_text(text)
     save_json(machine, out / "summary.json")
-    print(text)
+    log.detail(text)
+    log.say(short_summary(machine, full_summary_path=out / "summary.md"))
+    log.close()
 
 
 if __name__ == "__main__":

@@ -360,7 +360,7 @@ The project ran eight experimental phases before this restart. All results used 
 
 ## 12. Running the code (Kaggle)
 
-Every command uses the full path, so no change of folder is needed. Outputs go to `/kaggle/working/-MAMBA-STABILITY-/outputs/` (not tracked by git). On/off options always take an explicit value, `yes` or `no`.
+Every command uses the full path, so no change of folder is needed. The screen shows only progress bars and the key numbers; everything else goes to log files in `outputs/<experiment>/` (`log.txt` for training, `check_log.txt` for the architecture checks, `benchmark_log.txt` for the device timing). The full result text is in `summary.md`. Outputs go to `/kaggle/working/-MAMBA-STABILITY-/outputs/` (not tracked by git). On/off options always take an explicit value, `yes` or `no`.
 
 ```bash
 # clone (or update an existing clone)
