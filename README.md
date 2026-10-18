@@ -404,6 +404,11 @@ Every command uses the full path, so no change of folder is needed. The screen s
 
 ### Stage 1 closing runs (learning-rate check, then eight seeds)
 
+**Status (18 October 2026): steps A to D are done on seed 0.** The check chose 0.001 for both networks and the
+value is now stored in `configs/models/mamba_full_final.yaml` and `lstm_final.yaml` (evidence in
+`docs/evidence/`). In a fresh Kaggle session only steps A and E are needed; `tools/pick_learning_rate.py` will
+refuse to run again because the files are already filled in.
+
 Order matters: the learning rate of the final run is fixed by the check, using a rule written down before it
 (`configs/experiments/exp01c_learning_rate_check.yaml`). Until `tools/pick_learning_rate.py` has filled in
 `configs/models/mamba_full_final.yaml` and `lstm_final.yaml`, the final run refuses to start. Always pass

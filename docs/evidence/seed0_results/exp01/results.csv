@@ -1,0 +1,13 @@
+arm,seed,group,role,training_regime,model,decay_mode,parameters,diverged,one_step_rmse,rollout_rmse,error_at_10,error_at_50,growth_1_to_50,other_regime_rollout_rmse,certificate_holds_at_end,fraction_decay_positive,model_amplification_median,true_amplification_median,amplification_ratio_median,limit_cycle_amplitude_error,limit_cycle_period_error,limit_cycle_status,nonfinite_steps,epochs_run,train_minutes
+certified_teacher,0,teacher_forcing,baseline,teacher_forcing,ssm_minimal,certified,2850,False,0.0363527,0.584248,0.249593,0.820196,22.5622,2.41135,True,0,0.541654,2.50726,0.580236,0.0752595,0.14799,ok,0,40,0.91799
+free_sign_teacher,0,teacher_forcing,ablation,teacher_forcing,ssm_minimal,free_sign,2850,False,0.0373055,0.61938,0.26046,0.89559,24.0069,2.44924,True,0,0.809574,2.50726,0.641316,0.106348,0.350811,ok,0,40,0.914492
+unstable_init_teacher,0,teacher_forcing,ablation,teacher_forcing,ssm_minimal,unstable_init,2850,True,0.465448,19.0127,46.4364,1.57753,3.38927,73.5519,False,1,,,,0.997823,,diverged,0,40,0.914726
+certified_chained,0,chained,baseline,chained,ssm_minimal,certified,2850,False,0.0800201,0.256074,0.174068,0.34621,4.32654,2.70358,True,0,1.47301,2.50726,1.20822,0.0667124,0.0516856,ok,0,40,3.49352
+free_sign_chained,0,chained,ablation,chained,ssm_minimal,free_sign,2850,False,0.0451344,0.209292,0.125561,0.292407,6.47858,2.74761,True,0,1.51514,2.50726,1.10216,0.0219524,0.106964,ok,0,40,3.42727
+unstable_init_chained,0,chained,ablation,chained,ssm_minimal,unstable_init,2850,True,34.311,14.3813,1.57977,1.57753,0.0459773,86.2401,False,1,,,,0.997823,,diverged,32,1,0.0812469
+certified_direct,0,direct,baseline,direct,ssm_minimal,certified,2850,False,0.521703,1.08765,0.905547,1.36838,2.6229,1.50932,True,0,0.784242,2.50726,0.367594,29.3637,,diverged,0,40,0.921905
+free_sign_direct,0,direct,ablation,direct,ssm_minimal,free_sign,2850,False,0.553891,1.10053,0.922342,1.39834,2.52458,1.52989,True,0,0.814594,2.50726,0.375296,39.8888,,diverged,0,40,0.92158
+unstable_init_direct,0,direct,ablation,direct,ssm_minimal,unstable_init,2850,True,34.311,86.2401,87.3691,87.5381,2.55131,14.3813,False,1,0,2.50726,0,0.997823,,diverged,32,1,0.0203974
+lstm_teacher,0,teacher_forcing,reference,teacher_forcing,lstm,,3152,False,0.016214,0.192939,0.0893447,0.272981,16.8362,2.02361,,,2.3312,2.50726,1.64541,0.0246156,0.0126131,ok,0,40,0.100075
+lstm_chained,0,chained,reference,chained,lstm,,3152,False,0.118387,0.267067,0.182433,0.36203,3.05802,4.28374,,,1.58678,2.50726,0.86146,0.0249943,0.00324316,ok,0,40,2.1411
+lstm_direct,0,direct,reference,direct,lstm,,3152,False,0.276072,0.521489,0.48077,0.660255,2.3916,1.63905,,,0.920392,2.50726,0.356968,2.9971,0.078036,ok,0,40,0.106913

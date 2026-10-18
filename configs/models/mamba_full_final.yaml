@@ -1,10 +1,11 @@
 # Full Mamba with the learning rate chosen by the learning-rate check (exp01c).
 #
-# The value below is the word PLACEHOLDER on purpose. train.py and check_model.py refuse to run
-# while it is still there. tools/pick_learning_rate.py replaces it, exactly once, by applying the
-# selection rule that is written in configs/experiments/exp01c_learning_rate_check.yaml.
+# Chosen on 18 October 2026 by tools/pick_learning_rate.py, applying the rule written in
+# configs/experiments/exp01c_learning_rate_check.yaml: 0.001 (validation losses 0.309, 0.088, 0.040 at
+# 0.0001, 0.0003, 0.001; best value is the highest tested). Evidence: docs/evidence/exp01c_learning_rate_check/.
+# The value is final: do not change it after seeing results of the final run (exp01d).
 
 inherit: [mamba_full.yaml]
 
 training:
-  lr: PLACEHOLDER
+  lr: 1.0e-03

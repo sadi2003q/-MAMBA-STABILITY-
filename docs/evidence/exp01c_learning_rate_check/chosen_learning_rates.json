@@ -1,0 +1,82 @@
+{
+  "rule": {
+    "score": "lowest validation loss over all 40 epochs",
+    "skip_runs_that_blew_up": true,
+    "tie_within_percent": 3,
+    "tie_prefer": 0.001
+  },
+  "networks": {
+    "mamba_full_final": {
+      "chosen_learning_rate": 0.001,
+      "edge_of_grid_note": "highest value tested; a higher one was not tried",
+      "tied": [
+        0.001
+      ],
+      "all_runs": [
+        {
+          "blew_up": false,
+          "best_validation_loss": 0.30876959925503394,
+          "training_loss_at_best": 0.264910944737494,
+          "best_epoch": 40,
+          "lr": 0.0001,
+          "arm": "mamba_chained_lr_1e-4",
+          "score": 0.30876959925503394
+        },
+        {
+          "blew_up": false,
+          "best_validation_loss": 0.08782911617936293,
+          "training_loss_at_best": 0.05198030802421272,
+          "best_epoch": 40,
+          "lr": 0.0003,
+          "arm": "mamba_chained_lr_3e-4",
+          "score": 0.08782911617936293
+        },
+        {
+          "blew_up": false,
+          "best_validation_loss": 0.04042709196082847,
+          "training_loss_at_best": 0.02404311823192984,
+          "best_epoch": 38,
+          "lr": 0.001,
+          "arm": "mamba_chained_lr_1e-3",
+          "score": 0.04042709196082847
+        }
+      ]
+    },
+    "lstm_final": {
+      "chosen_learning_rate": 0.001,
+      "edge_of_grid_note": "highest value tested; a higher one was not tried",
+      "tied": [
+        0.001
+      ],
+      "all_runs": [
+        {
+          "blew_up": false,
+          "best_validation_loss": 0.26437568433803793,
+          "training_loss_at_best": 0.27037866972386837,
+          "best_epoch": 40,
+          "lr": 0.0001,
+          "arm": "lstm_chained_lr_1e-4",
+          "score": 0.26437568433803793
+        },
+        {
+          "blew_up": false,
+          "best_validation_loss": 0.0854354288565747,
+          "training_loss_at_best": 0.0881046075373888,
+          "best_epoch": 40,
+          "lr": 0.0003,
+          "arm": "lstm_chained_lr_3e-4",
+          "score": 0.0854354288565747
+        },
+        {
+          "blew_up": false,
+          "best_validation_loss": 0.02198641084962421,
+          "training_loss_at_best": 0.01780690305167809,
+          "best_epoch": 39,
+          "lr": 0.001,
+          "arm": "lstm_chained_lr_1e-3",
+          "score": 0.02198641084962421
+        }
+      ]
+    }
+  }
+}
