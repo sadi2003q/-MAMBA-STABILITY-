@@ -1,0 +1,114 @@
+name: exp01c_learning_rate_check
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Was the full Mamba trained fairly, or did the learning rate 0.001 hold it back?"
+hypothesis: >
+  H0 (training settings): with a better learning rate, the full Mamba trained on its own
+  predictions (chained) comes within 20% of the Long Short-Term Memory network trained the same way.
+
+# --------------------------------------------------------------------------------------------
+# Why this check exists (written before any result)
+#   exp01b (seed 0) showed the full Mamba clearly worse than the Long Short-Term Memory network in all three
+#   training methods, and worse than the simplified Mamba under chained training (0.465 against 0.256).
+#   Its chained validation loss at epoch 40 was about twice its training loss and bounced between
+#   epochs (0.040 to 0.063), which did not happen for the other two networks. That points at the
+#   training settings, but it cannot be told apart from a design weakness without this check.
+# --------------------------------------------------------------------------------------------
+math_signal:
+  signal: INCONCLUSIVE
+  what_was_checked: >
+    Training records of exp01b (train/validation gap, epoch-to-epoch noise) and a read-through of
+    src/models/mamba_block.py (standard structure, no defect found). No equation separates "learning
+    rate too high" from "design weaker" for a six-layer recurrent network trained on 50 chained steps.
+  prediction: >
+    If the training settings are the cause, a lower learning rate (0.0003 or 0.0001) lowers the full
+    Mamba's best validation loss clearly (more than 3%) below the value at 0.001, and the gap between
+    its validation and training loss closes. If the design is the cause, the best validation loss
+    stays about the same at every learning rate.
+  assumptions: >
+    One seed (seed 0). Only three learning rates, all equal or below the one already used, because the
+    evidence points downwards; a better value above 0.001 would be missed (the picker reports it if the
+    best value sits at the edge of the grid). The same 40 epochs and the same learning-rate decay of
+    0.97 per epoch as every other experiment.
+
+# What is varied: only the learning rate (training.lr). Everything else is identical to exp01b / exp01.
+# Both networks get the same three values, so neither is favoured.
+# The guarantee-on (certified) Mamba is used for the check; the chosen value is then used for BOTH the
+# guarantee-on and guarantee-removed arms of the final run, so the check cannot be tuned towards the
+# arm we are testing.
+arms:
+  - name: mamba_chained_lr_1e-4
+    label: "Full Mamba, learning rate 0.0001"
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: certified}, training: {lr: 1.0e-4}}
+    training_regime: chained
+    group: "Full Mamba"
+    role: reference
+    sweep_for: mamba_full_final
+    sweep_lr: 1.0e-4
+    why: lower learning rate, guarantee on
+  - name: mamba_chained_lr_3e-4
+    label: "Full Mamba, learning rate 0.0003"
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: certified}, training: {lr: 3.0e-4}}
+    training_regime: chained
+    group: "Full Mamba"
+    role: reference
+    sweep_for: mamba_full_final
+    sweep_lr: 3.0e-4
+    why: lower learning rate, guarantee on
+  - name: mamba_chained_lr_1e-3
+    label: "Full Mamba, learning rate 0.001"
+    model: ../models/mamba_full.yaml
+    overrides: {model: {decay_mode: certified}, training: {lr: 1.0e-3}}
+    training_regime: chained
+    group: "Full Mamba"
+    role: baseline
+    sweep_for: mamba_full_final
+    sweep_lr: 1.0e-3
+    why: the value used so far (Cevaal et al.), rerun so this check is self-contained
+  - name: lstm_chained_lr_1e-4
+    label: "Long Short-Term Memory network, learning rate 0.0001"
+    model: ../models/lstm.yaml
+    overrides: {training: {lr: 1.0e-4}}
+    training_regime: chained
+    group: "Long Short-Term Memory network"
+    role: reference
+    sweep_for: lstm_final
+    sweep_lr: 1.0e-4
+    why: same three values for the comparison network
+  - name: lstm_chained_lr_3e-4
+    label: "Long Short-Term Memory network, learning rate 0.0003"
+    model: ../models/lstm.yaml
+    overrides: {training: {lr: 3.0e-4}}
+    training_regime: chained
+    group: "Long Short-Term Memory network"
+    role: reference
+    sweep_for: lstm_final
+    sweep_lr: 3.0e-4
+    why: same three values for the comparison network
+  - name: lstm_chained_lr_1e-3
+    label: "Long Short-Term Memory network, learning rate 0.001"
+    model: ../models/lstm.yaml
+    overrides: {training: {lr: 1.0e-3}}
+    training_regime: chained
+    group: "Long Short-Term Memory network"
+    role: baseline
+    sweep_for: lstm_final
+    sweep_lr: 1.0e-3
+    why: the value used so far, rerun so this check is self-contained
+
+# The rule below is applied by tools/pick_learning_rate.py, separately for each network, and it is
+# the only thing that decides the learning rate of the final run (exp01d). The screen table of this
+# experiment shows test-window errors for information only; they play no part in the choice.
+decision_rule:
+  type: sweep
+  metric: rollout_rmse
+  selection:
+    score: lowest validation loss over all 40 epochs     # the same epoch train.py keeps and evaluates
+    skip_runs_that_blew_up: true
+    tie_within_percent: 3        # scores closer than this count as equal (one seed is noisy)
+    tie_prefer: 1.0e-3           # in a tie keep the value already used, so nothing changes without evidence
+    # Tie rule in full: every value whose score is within tie_within_percent of the best score counts as
+    # tied. If 0.001 is among the tied values it is chosen; otherwise the tied value closest to 0.001
+    # (on a logarithmic scale) is chosen.

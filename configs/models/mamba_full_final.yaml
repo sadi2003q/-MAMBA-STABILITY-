@@ -1,0 +1,10 @@
+# Full Mamba with the learning rate chosen by the learning-rate check (exp01c).
+#
+# The value below is the word PLACEHOLDER on purpose. train.py and check_model.py refuse to run
+# while it is still there. tools/pick_learning_rate.py replaces it, exactly once, by applying the
+# selection rule that is written in configs/experiments/exp01c_learning_rate_check.yaml.
+
+inherit: [mamba_full.yaml]
+
+training:
+  lr: PLACEHOLDER

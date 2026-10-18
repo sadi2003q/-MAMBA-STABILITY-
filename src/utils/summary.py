@@ -216,6 +216,11 @@ def build_summary(exp_cfg: dict, rows: list[dict], quick: bool = False) -> tuple
         else:
             decision = f"NOT worth confirming (no arm that trained differed by more than {thr:.0f}%)"
         decision += ". Blown-up arms are reported as counts, not errors."
+    elif rule.get("type") == "sweep":
+        # A learning-rate check has no "worth confirming" decision of its own: the learning rate is
+        # chosen by tools/pick_learning_rate.py, using the rule written in the experiment file.
+        decision = ("none here. Run tools/pick_learning_rate.py to apply the rule that was written "
+                    "down before this check.")
     else:
         decision = ("WORTH CONFIRMING (" + "; ".join(decision_hits) + ")") if decision_hits else \
             "NOT worth confirming (no proposed arm met the declared rule)"

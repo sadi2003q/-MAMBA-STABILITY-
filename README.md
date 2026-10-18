@@ -402,13 +402,54 @@ Every command uses the full path, so no change of folder is needed. The screen s
 !python -m pytest -q /kaggle/working/-MAMBA-STABILITY-/tests
 ```
 
+### Stage 1 closing runs (learning-rate check, then eight seeds)
+
+Order matters: the learning rate of the final run is fixed by the check, using a rule written down before it
+(`configs/experiments/exp01c_learning_rate_check.yaml`). Until `tools/pick_learning_rate.py` has filled in
+`configs/models/mamba_full_final.yaml` and `lstm_final.yaml`, the final run refuses to start. Always pass
+`--ask-first no` on Kaggle (a question on the screen cannot be answered there).
+Estimated time on a Kaggle T4: learning-rate check about 95 minutes; final run about 8.6 hours in total.
+
+```bash
+# A. clone (or update)
+!git clone https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- \
+    || git -C /kaggle/working/-MAMBA-STABILITY- pull
+
+# B. learning-rate check: architecture checks, then the six runs (seed 0)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01c_learning_rate_check.yaml
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01c_learning_rate_check.yaml \
+    --seed 0 \
+    --quick no \
+    --ask-first no
+
+# C. apply the written-down rule (fills in the final-run files, once)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/pick_learning_rate.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01c_learning_rate_check.yaml
+
+# D. final run: architecture checks, then seeds 0-3, then seeds 4-7 (a finished run is never repeated)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01d_certificate_ablation_confirm.yaml
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01d_certificate_ablation_confirm.yaml \
+    --seeds 0 1 2 3 \
+    --quick no \
+    --ask-first no
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01d_certificate_ablation_confirm.yaml \
+    --seeds 0 1 2 3 4 5 6 7 \
+    --quick no \
+    --ask-first no
+```
+
 Options of `train.py`:
 
 | Option | Values | Default | Meaning |
 |---|---|---|---|
 | `--quick` | yes / no | no | tiny data and 2 epochs; checks that the code runs, never answers a question |
 | `--resume` | yes / no | yes | continue finished and interrupted runs; `no` starts over |
-| `--ask-first` | yes / no | yes | ask before a run longer than 30 minutes (never asked on Kaggle, where there is no keyboard input) |
+| `--ask-first` | yes / no | yes | ask before a run longer than 30 minutes (on Kaggle always pass `--ask-first no`: the question cannot be answered there) |
 | `--estimate` | yes / no | yes | time a few batches per arm and print the expected run time |
 | `--seed` / `--seeds` | numbers | 0 | which seeds to run |
 | `--arms` | arm names | all | run only these arms |

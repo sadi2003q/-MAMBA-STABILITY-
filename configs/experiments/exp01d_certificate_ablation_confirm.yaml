@@ -1,0 +1,112 @@
+name: exp01d_certificate_ablation_confirm
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Does removing the stability guarantee change how accurate the full Mamba's predictions are?"
+hypothesis: >
+  H1 on the full architecture, eight seeds: removing the latent certificate changes 50-step prediction
+  error by more than 20% under the same training regime.
+
+# --------------------------------------------------------------------------------------------
+# Stage 1 closing run. Seeds 0 to 7, full Mamba, certified against free-sign decay, three training
+# methods, plus the Long Short-Term Memory network as a reference. Learning rates are NOT chosen here:
+# they come from the learning-rate check (exp01c) through tools/pick_learning_rate.py, which fills
+# configs/models/mamba_full_final.yaml and lstm_final.yaml. While those files still say PLACEHOLDER,
+# check_model.py and train.py refuse to run.
+# --------------------------------------------------------------------------------------------
+math_signal:
+  signal: NEGATIVE for H1 (we expect no difference)
+  what_was_checked: >
+    Same argument as exp01 and exp01b: a01 shows that stability of chained prediction depends on
+    det(-(D + C (I - A_bar)^(-1) B)), which the latent certificate does not constrain; the loss
+    gradient keeps the decay negative by itself whenever memory growth hurts the fit (exp01: 0% positive
+    after training; exp01b: 0% positive after training).
+  prediction: >
+    free_sign / certified error ratio has its bootstrap 95% interval inside [0.90, 1.10] in every
+    training method; the decay stays negative in every free_sign run.
+  assumptions: >
+    Training reaches a similar fit in both arms (same learning rate, chosen on the certified arm only);
+    seed-to-seed spread is small enough for eight seeds to resolve a 10% difference (this is NOT known
+    for chained training of the full Mamba, whose validation loss was noisy in exp01b: if the interval
+    is wider than 0.90 to 1.10 the result is "no difference detected", not "shown equivalent").
+
+# role: baseline (certified) | ablation (free sign) | reference (Long Short-Term Memory network, shown only)
+arms:
+  - name: certified_teacher
+    model: ../models/mamba_full_final.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: baseline
+    why: certificate on, full architecture, teacher forcing
+  - name: free_sign_teacher
+    model: ../models/mamba_full_final.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: ablation
+    expected: same
+    why: certificate removed, full architecture, teacher forcing
+  - name: lstm_teacher
+    model: ../models/lstm_final.yaml
+    training_regime: teacher_forcing
+    group: teacher_forcing
+    role: reference
+    why: certificate-free recurrent network, same training method
+
+  - name: certified_chained
+    model: ../models/mamba_full_final.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: chained
+    group: chained
+    role: baseline
+    why: certificate on, full architecture, chained-prediction training
+  - name: free_sign_chained
+    model: ../models/mamba_full_final.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: chained
+    group: chained
+    role: ablation
+    expected: same
+    why: certificate removed, full architecture, chained-prediction training
+  - name: lstm_chained
+    model: ../models/lstm_final.yaml
+    training_regime: chained
+    group: chained
+    role: reference
+    why: certificate-free recurrent network, same training method
+
+  - name: certified_direct
+    model: ../models/mamba_full_final.yaml
+    overrides: {model: {decay_mode: certified}}
+    training_regime: direct
+    group: direct
+    role: baseline
+    why: certificate on, full architecture, direct multi-step
+  - name: free_sign_direct
+    model: ../models/mamba_full_final.yaml
+    overrides: {model: {decay_mode: free_sign}}
+    training_regime: direct
+    group: direct
+    role: ablation
+    expected: same
+    why: certificate removed, full architecture, direct multi-step
+  - name: lstm_direct
+    model: ../models/lstm_final.yaml
+    training_regime: direct
+    group: direct
+    role: reference
+    why: certificate-free recurrent network, same training method
+
+# How the result may be worded in the paper (decided now, before any run):
+#   - ratio interval inside [0.90, 1.10] in all three training methods:
+#       "removing the guarantee changes the 50-step error by at most 10%"  (equivalence shown)
+#   - interval contains 1.0 but is wider than [0.90, 1.10]:
+#       "no difference detected; equivalence within 10% not shown"
+#   - interval entirely above or below 1.0:
+#       "removing the guarantee changes the error" for that training method (report the size)
+# Runs that blow up are reported as counts, never as errors.
+decision_rule:
+  type: ablation
+  metric: rollout_rmse          # root-mean-square error averaged over the 50 prediction steps
+  threshold_percent: 20         # Stage 1 rule, still printed
+  equivalence_margin_percent: 10   # Stage 2 rule for a null result (plan.md, Step 7N), unchanged from exp01b
