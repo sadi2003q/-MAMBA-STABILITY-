@@ -152,7 +152,12 @@ def main():
     for final_name, arms in groups.items():
         scores[final_name] = []
         for arm in arms:
-            record = read_training_record(out / "runs" / f"{arm['name']}_seed0")
+            # Arms with reuse_run_dir were trained earlier (exp01 / exp01b); their records are kept in the repository
+            if arm.get("reuse_run_dir"):
+                run_dir = REPO_ROOT / arm["reuse_run_dir"]
+            else:
+                run_dir = out / "runs" / f"{arm['name']}_seed0"
+            record = read_training_record(run_dir)
             if record is None:
                 missing.append(arm["name"])
                 continue

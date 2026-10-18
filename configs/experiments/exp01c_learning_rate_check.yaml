@@ -33,6 +33,9 @@ math_signal:
 
 # What is varied: only the learning rate (training.lr). Everything else is identical to exp01b / exp01.
 # Both networks get the same three values, so neither is favoured.
+# To save Kaggle time the two runs at 0.001 are not repeated: they were already trained with identical
+# settings in exp01b and exp01 (seed 0), and their records are reused (see reuse_run_dir below and
+# docs/evidence/exp01c_reused_runs/README.md). Train only the four new arms with --arms.
 # The guarantee-on (certified) Mamba is used for the check; the chosen value is then used for BOTH the
 # guarantee-on and guarantee-removed arms of the final run, so the check cannot be tuned towards the
 # arm we are testing.
@@ -66,7 +69,10 @@ arms:
     role: baseline
     sweep_for: mamba_full_final
     sweep_lr: 1.0e-3
-    why: the value used so far (Cevaal et al.), rerun so this check is self-contained
+    reuse_run_dir: docs/evidence/exp01c_reused_runs/mamba_chained_lr_1e-3_seed0
+    why: >
+      the value used so far (Cevaal et al.). Not run again: exp01b already trained exactly this
+      (certified_chained, seed 0) and its two record files are kept in the repository.
   - name: lstm_chained_lr_1e-4
     label: "Long Short-Term Memory network, learning rate 0.0001"
     model: ../models/lstm.yaml
@@ -96,7 +102,10 @@ arms:
     role: baseline
     sweep_for: lstm_final
     sweep_lr: 1.0e-3
-    why: the value used so far, rerun so this check is self-contained
+    reuse_run_dir: docs/evidence/exp01c_reused_runs/lstm_chained_lr_1e-3_seed0
+    why: >
+      the value used so far. Not run again: exp01 already trained exactly this (lstm_chained, seed 0)
+      and its two record files are kept in the repository.
 
 # The rule below is applied by tools/pick_learning_rate.py, separately for each network, and it is
 # the only thing that decides the learning rate of the final run (exp01d). The screen table of this

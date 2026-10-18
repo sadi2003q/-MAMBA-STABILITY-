@@ -408,19 +408,22 @@ Order matters: the learning rate of the final run is fixed by the check, using a
 (`configs/experiments/exp01c_learning_rate_check.yaml`). Until `tools/pick_learning_rate.py` has filled in
 `configs/models/mamba_full_final.yaml` and `lstm_final.yaml`, the final run refuses to start. Always pass
 `--ask-first no` on Kaggle (a question on the screen cannot be answered there).
-Estimated time on a Kaggle T4: learning-rate check about 95 minutes; final run about 8.6 hours in total.
+Estimated time on a Kaggle T4: learning-rate check about 62 minutes (the two runs at 0.001 are reused from
+exp01 and exp01b, not repeated); final run on one seed about 64 minutes; the later eight-seed run about 8.6 hours.
+One seed shows direction only. The claim "removing the guarantee changes nothing" needs the eight-seed run (step E).
 
 ```bash
 # A. clone (or update)
 !git clone https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- \
     || git -C /kaggle/working/-MAMBA-STABILITY- pull
 
-# B. learning-rate check: architecture checks, then the six runs (seed 0)
+# B. learning-rate check: architecture checks, then the four new runs (seed 0; the two runs at 0.001 are reused)
 !python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01c_learning_rate_check.yaml
 !python /kaggle/working/-MAMBA-STABILITY-/train.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01c_learning_rate_check.yaml \
     --seed 0 \
+    --arms mamba_chained_lr_1e-4 mamba_chained_lr_3e-4 lstm_chained_lr_1e-4 lstm_chained_lr_3e-4 \
     --quick no \
     --ask-first no
 
@@ -428,14 +431,17 @@ Estimated time on a Kaggle T4: learning-rate check about 95 minutes; final run a
 !python /kaggle/working/-MAMBA-STABILITY-/tools/pick_learning_rate.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01c_learning_rate_check.yaml
 
-# D. final run: architecture checks, then seeds 0-3, then seeds 4-7 (a finished run is never repeated)
+# D. final run on ONE seed (direction only): architecture checks, then seed 0
 !python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01d_certificate_ablation_confirm.yaml
 !python /kaggle/working/-MAMBA-STABILITY-/train.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01d_certificate_ablation_confirm.yaml \
-    --seeds 0 1 2 3 \
+    --seed 0 \
     --quick no \
     --ask-first no
+
+# E. LATER, for the paper claim: all eight seeds (a finished run is never repeated, so seed 0 is kept
+#    if the outputs folder of step D is still there; otherwise it is simply trained again)
 !python /kaggle/working/-MAMBA-STABILITY-/train.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp01d_certificate_ablation_confirm.yaml \
     --seeds 0 1 2 3 4 5 6 7 \
