@@ -112,7 +112,7 @@ Implication:         timing drift is the likely main cause, but its size must be
 5. **In parallel, when graphics-card time allows:** the eight-seed Stage 1 repeat (README step E, about
    8.6 hours); Stage 2 is then rerun on those models to confirm.
 
-**Status (19 October 2026).** Steps 1 and 2 done: `analysis/a03` (run; result in `docs/math_notes.md`),
+**Status (19 October 2026, evening).** Stage 2 and the Stage 2b follow-up are run and logged (`docs/results_log.md`); plain-language update for the supervisor written as a separate document. Earlier the same day — steps 1 and 2 done: `analysis/a03` (run; result in `docs/math_notes.md`),
 `tools/diagnose_errors.py` with its calculations in `src/evaluation/error_diagnosis.py`, settings and rules
 in `configs/analysis/stage2_diagnosis.yaml`, and the fifteen seed-0 models (retrained on Kaggle the same
 day; identical to Stage 1) in `models/seed0/`. Next: Sadi runs README "Stage 2 diagnosis".
