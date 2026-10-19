@@ -1,0 +1,81 @@
+# Stage 2b — follow-up of the Stage 2 diagnosis (19 October 2026, written before any Stage 2b result).
+#
+# What Stage 2 found (seed 0, direction only), from outputs/stage2_diagnosis/details.json:
+#   chained training           one-step mistake   accumulation factor   50-step error
+#   full Mamba                      0.096                6.8                0.465
+#   Long Short-Term Memory          0.112                3.3                0.267
+# Accumulation factor = size of the running sum of one-step mistakes / size of one mistake.
+# About 5.0 = unrelated mistakes, about 29 = the same mistake every step, below 5.0 = mistakes cancel.
+# The full Mamba's mistakes are smaller but do not cancel; the Long Short-Term Memory network's cancel.
+#
+# Stage 2b checks this directly (it assumed equal-sized mistakes along the horizon) and settles where
+# the 24% slow free-running clock comes from. No training; tools/diagnose_followup.py.
+
+name: stage2b_followup
+question: "Do the full Mamba's one-step mistakes fail to cancel, which part of the mistake is it, and where does the slow clock come from?"
+
+models_root: models/seed0
+runs:      # only models evaluated with chained prediction (direct prediction has no one-step mistakes)
+  - exp01d_certificate_ablation_confirm/certified_teacher_seed0
+  - exp01d_certificate_ablation_confirm/free_sign_teacher_seed0
+  - exp01d_certificate_ablation_confirm/certified_chained_seed0
+  - exp01d_certificate_ablation_confirm/free_sign_chained_seed0
+  - exp01d_certificate_ablation_confirm/lstm_teacher_seed0
+  - exp01d_certificate_ablation_confirm/lstm_chained_seed0
+  - exp01_certificate_ablation/certified_teacher_seed0
+  - exp01_certificate_ablation/free_sign_teacher_seed0
+  - exp01_certificate_ablation/certified_chained_seed0
+  - exp01_certificate_ablation/free_sign_chained_seed0
+
+settings:
+  max_windows: 2000
+  batch_size: 256
+  max_gap: 10                 # step-to-step correlation for gaps 1 ... 10
+  zero_input_windows: 24      # windows spread over one loop of the true zero-input cycle
+  loop_settle_steps: 1000
+  loop_start: [2.0, 0.0]
+  min_speed_fraction: 0.05
+  small_input_size: 1.0       # "near zero" input, against a peak of 15
+quick:
+  max_windows: 64
+  zero_input_windows: 4
+
+checks:
+  c1_cancelling:
+    method: >
+      Correlation between the one-step mistake at step k and at step k + 1 (same window, test windows,
+      dot product of the two-number mistakes). Negative = the next mistake tends to undo the last one.
+    prediction: >
+      under chained training, the full Mamba's step-to-step correlation is at least 0.10 higher than the
+      Long Short-Term Memory network's (its mistakes cancel less)
+    margin: 0.10
+  c2_which_part:
+    method: >
+      Accumulation factor computed separately for the timing part (along the true direction of motion)
+      and the shape part (across it) of the one-step mistakes.
+    prediction: "for the full Mamba under chained training, the timing part's factor is larger than the shape part's"
+  c3_zero_input_clock:
+    method: >
+      One-step predictions (true history) along the true zero-input loop; clock speed = 1 - mean lag per
+      step / time step. Compared with the free-running loop time from Stage 2 (full Mamba, chained: 1.24,
+      which corresponds to a clock speed of about 0.81). Also recorded: how often the training input is
+      near zero, and its longest near-zero stretch.
+    rule: >
+      clock speed 0.90 or less: "the one-step model itself is slow at zero input";
+      0.97 or more: "the one-step model keeps time; the slowness is created by feeding predictions back";
+      in between: "partly both"
+    slow_threshold: 0.90
+    on_time_threshold: 0.97
+    prediction: "none (both outcomes are plausible)"
+
+math_signal:
+  signal: POSITIVE (for "the full Mamba loses through how its one-step mistakes line up")
+  what_was_checked: >
+    accumulation factor against the unrelated (5.0) and repeated (29) references, from Stage 2 numbers
+  result: >
+    full Mamba 6.8, Long Short-Term Memory network 3.3; explains the 1.74 times gap in 50-step error
+  assumptions: >
+    one-step mistakes about equal in size along the horizon; one seed
+  implication: >
+    if c1 holds, Stage 3 targets making Mamba's successive mistakes cancel (a memory update that depends
+    on the memory, Chung et al. 2026), compared against the post-hoc timing realignment baseline

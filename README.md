@@ -484,6 +484,17 @@ processor. Run the quick check first (about a minute; its numbers mean nothing).
 
 Results go to `outputs/stage2_diagnosis/` (`summary.md`, `results.csv`, `details.json`, `log.txt`).
 
+Stage 2b follow-up (a few minutes, processor only):
+
+```bash
+!python /kaggle/working/-MAMBA-STABILITY-/tools/diagnose_followup.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/analysis/stage2b_followup.yaml \
+    --quick no \
+    --device cpu
+```
+
+Results go to `outputs/stage2b_followup/`.
+
 Options of `train.py`:
 
 | Option | Values | Default | Meaning |

@@ -647,3 +647,128 @@ def step_jacobian_shape(model, split, context_len, horizon, n_windows, steps, de
             "spectral_radius_max": float(np.max(radius_values)),
             "henrici_median": float(np.median(henrici_values)),
             "pervez_defect_median": float(np.median(defect_values))}
+
+
+# =================================================================================================
+# Stage 2b — do the one-step mistakes cancel each other, and where does the slow clock come from?
+# =================================================================================================
+def signed_parts(error, direction):
+    """Timing part (along the direction of motion) and shape part (across it), both signed numbers.
+
+    error, direction: [W, H, 2]. Returns two arrays [W, H].
+    """
+    across = np.stack([-direction[..., 1], direction[..., 0]], axis=-1)   # direction turned 90 degrees
+    timing = np.sum(error * direction, axis=-1)
+    shape = np.sum(error * across, axis=-1)
+    return timing, shape
+
+
+def step_to_step_correlation(values, max_gap):
+    """How alike are the mistakes at step k and step k + gap, inside the same window?
+
+    values: [W, H] (a scalar) or [W, H, 2] (a vector, compared with a dot product).
+    +1 = same mistake again, 0 = unrelated, negative = the next mistake tends to undo the last one.
+    Returns a list for gap = 1 ... max_gap.
+    """
+    if values.ndim == 2:
+        values = values[..., None]
+    result = []
+    for gap in range(1, max_gap + 1):
+        # Step 1: pair every step with the step `gap` later, in the same window
+        first = values[:, :-gap]
+        later = values[:, gap:]
+        # Step 2: correlation = average product / (size of first * size of later)
+        product = np.sum(first * later)
+        size_first = np.sqrt(np.sum(first * first))
+        size_later = np.sqrt(np.sum(later * later))
+        if size_first > 0 and size_later > 0:
+            result.append(float(product / (size_first * size_later)))
+        else:
+            result.append(0.0)
+    return result
+
+
+def accumulation_factor(values):
+    """Size of the running sum of the mistakes / size of one mistake (root-mean-square, all steps).
+
+    Reference values for 50 steps: about 5.0 if mistakes are unrelated, about 29 if the same mistake
+    repeats every step, below 5.0 if mistakes cancel each other.
+    """
+    running_sum = np.cumsum(values, axis=1)
+    one = root_mean_square(values)
+    if one == 0:
+        return None
+    return root_mean_square(running_sum) / one
+
+
+def reference_accumulation(horizon):
+    """The two reference values of accumulation_factor for this horizon."""
+    steps = np.arange(1, horizon + 1, dtype=float)
+    unrelated = float(np.sqrt(np.mean(steps)))
+    repeated = float(np.sqrt(np.mean(steps * steps)))
+    return unrelated, repeated
+
+
+@torch.no_grad()
+def zero_input_one_step_clock(model, norm, system, trajectory, first_index, steps_per_loop,
+                              n_windows, context_len, horizon, device, min_speed_fraction):
+    """One-step predictions along the TRUE zero-input loop: does the model lose time on every step?
+
+    Windows start at n_windows points spread over one loop. Clock speed = 1 - mean lag per step / dt
+    (1.0 = right; 0.8 = 20% slow).
+    """
+    model.eval()
+    C = context_len
+    H = horizon
+    dt = system.dt
+    windows = []
+    for i in range(n_windows):
+        start = first_index + int(round(i * steps_per_loop / n_windows))
+        windows.append(trajectory[start:start + C + H + 1])
+    true = np.stack(windows)                                                    # [n, C+H+1, 2]
+
+    # Step 1: one-step predictions from the true history, zero input
+    x = torch.tensor(norm.x(true), dtype=torch.float32, device=device)
+    u_physical = np.zeros((len(windows), C + H, 1))
+    u = torch.tensor(norm.u(u_physical), dtype=torch.float32, device=device)
+    predictions = model.teacher_forced(x[:, :-1], u)[:, C:C + H]
+    predictions = norm.x_inverse(predictions.cpu().numpy().astype(np.float64))
+    error = predictions - true[:, C + 1:C + H + 1]
+
+    # Step 2: direction of motion of the true loop at each predicted step (central difference)
+    velocity = (true[:, C + 2:C + H + 2 - 1] - true[:, C:C + H - 1]) / (2.0 * dt)  # steps 1 ... H-1
+    error = error[:, :H - 1]
+
+    # Step 3: lag per step in time units (positive = behind) and the clock speed it implies
+    direction, speed = unit_vectors(velocity)
+    timing = np.sum(error * direction, axis=-1)
+    fast_enough = speed > min_speed_fraction * np.median(speed)
+    lag = -timing[fast_enough] / speed[fast_enough]
+    mean_lag = float(np.mean(lag))
+    rms_lag = root_mean_square(lag)
+    return {"windows": len(windows),
+            "mean_lag_per_step": mean_lag,
+            "sign_consistency": abs(mean_lag) / rms_lag if rms_lag > 0 else 0.0,
+            "implied_clock_speed": 1.0 - mean_lag / dt,
+            "one_step_rms": root_mean_square(error)}
+
+
+def input_coverage(split, small_size, stretch_steps):
+    """How often the training input is close to zero (the free-running test uses exactly zero input).
+
+    Returns the share of steps with |u| below small_size, and the longest stretch of such steps.
+    """
+    u = np.abs(split.u[:, 0])
+    small = u < small_size
+    longest = 0
+    current = 0
+    for is_small in small:
+        if is_small:
+            current = current + 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return {"share_of_steps_small": float(small.mean()),
+            "longest_small_stretch_steps": int(longest),
+            "stretch_needed_steps": int(stretch_steps),
+            "input_peak": float(u.max())}
