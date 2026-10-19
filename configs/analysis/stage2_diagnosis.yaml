@@ -1,0 +1,155 @@
+# Stage 2 — find out what actually makes the predictions go wrong (docs/stage2_plan.md).
+#
+# Written 19 October 2026, before any Stage 2 result exists. The predictions and pass/fail rules
+# below are fixed now and must not be changed after seeing results.
+#
+# No training. tools/diagnose_errors.py loads the fifteen seed-0 models stored in models/seed0/
+# and answers four questions on the test windows (the same windows Stage 1 used).
+
+name: stage2_diagnosis
+question: "What makes the chained predictions go wrong: timing or shape, feedback or pile-up, a slow clock or an amplifier?"
+
+# ------------------------------------------------------------------------------------------------
+# The trained models (seed 0). Folders are relative to models_root, which is relative to the
+# repository root. Each folder holds checkpoint.pt (weights + the full training configuration).
+# ------------------------------------------------------------------------------------------------
+models_root: models/seed0
+runs:
+  # full Mamba (exp01d, learning rate 0.001)
+  - exp01d_certificate_ablation_confirm/certified_teacher_seed0
+  - exp01d_certificate_ablation_confirm/free_sign_teacher_seed0
+  - exp01d_certificate_ablation_confirm/certified_chained_seed0
+  - exp01d_certificate_ablation_confirm/free_sign_chained_seed0
+  - exp01d_certificate_ablation_confirm/certified_direct_seed0
+  - exp01d_certificate_ablation_confirm/free_sign_direct_seed0
+  # Long Short-Term Memory network (exp01d, learning rate 0.001)
+  - exp01d_certificate_ablation_confirm/lstm_teacher_seed0
+  - exp01d_certificate_ablation_confirm/lstm_chained_seed0
+  - exp01d_certificate_ablation_confirm/lstm_direct_seed0
+  # simplified Mamba (exp01, one layer, no convolution)
+  - exp01_certificate_ablation/certified_teacher_seed0
+  - exp01_certificate_ablation/free_sign_teacher_seed0
+  - exp01_certificate_ablation/certified_chained_seed0
+  - exp01_certificate_ablation/free_sign_chained_seed0
+  - exp01_certificate_ablation/certified_direct_seed0
+  - exp01_certificate_ablation/free_sign_direct_seed0
+
+# ------------------------------------------------------------------------------------------------
+# Settings
+# ------------------------------------------------------------------------------------------------
+settings:
+  max_windows: 2000          # test windows used for Q1-Q3 (Stage 1 evaluated on the same 2000)
+  batch_size: 256
+  alignment_search_steps: 30 # Q1 cross-check: look this many steps before/after on the true path
+                             # (less than half a loop of about 73 steps, so it cannot jump a loop)
+  min_speed_fraction: 0.05   # Q3 time-unit lag: skip points slower than 5% of the median speed
+  push_size: 0.01            # Q4: size of the push, physical units
+  loop_points: 12            # Q4: points spread evenly around one loop of the true limit cycle
+  loop_settle_steps: 1000    # Q4: steps simulated first so the true system settles on the loop
+  loop_start: [2.0, 0.0]
+  limit_cycle_steps: 1000    # free-running test with zero input (same as Stage 1)
+  magnification_windows: 16  # Pervez and Locatello diagnostic: largest error magnification
+  step_jacobian_windows: 4   # non-normality of the full one-step Jacobian (prediction + memory)
+  step_jacobian_steps: [1, 25, 50]
+
+# Applied on top of the settings with --quick yes. Code check only: never interpret.
+quick:
+  max_windows: 64
+  loop_points: 2
+  magnification_windows: 1
+  step_jacobian_windows: 1
+  step_jacobian_steps: [1]
+
+# ------------------------------------------------------------------------------------------------
+# Methods, predictions and rules (fixed before running)
+# ------------------------------------------------------------------------------------------------
+questions:
+  q1_timing_or_shape:
+    method: >
+      At every predicted step, split the error into the part along the direction the true system is
+      moving (timing) and the part across it (shape). Direction of motion = central difference of the
+      true trajectory at that step, in physical units. Per window: timing share = sum over the 50 steps
+      of the squared timing part / sum of the squared error. Median over windows.
+      Cross-check (recorded, not used by the rule): slide each prediction along the true path in time
+      (within alignment_search_steps); timing share = 1 - remaining squared distance / squared error.
+    rule: "timing-dominated if the median timing share is at least 0.60"
+    threshold: 0.60
+    prediction: "timing-dominated for the full Mamba (guarantee on) under chained training"
+
+  q2_feedback_or_pile_up:
+    method: >
+      Compare the normal chained error with the error obtained by adding up the one-step errors made
+      from the true history (teacher-forced one-step predictions at the same 50 positions), so mistakes
+      only add up and nothing is fed back. Ratio = root-mean-square chained error / root-mean-square
+      added-up error, over all windows and steps. Recorded too: the same one-step errors carried by the
+      TRUE system's own Jacobians (what a perfect feedback loop would do with them).
+      Only for models evaluated with chained prediction (direct prediction feeds nothing back).
+    rule: "amplified by feedback if the ratio is above 1.5"
+    threshold: 1.5
+    prediction: "none (no direction predicted in docs/stage2_plan.md)"
+
+  q3_slow_clock_or_amplifier:
+    method: >
+      Timing-error curve = root-mean-square over windows of the timing part at each step (1 to 50).
+      Fit a straight line and an exponential (two numbers each) and compare the sum of squared misfits.
+      Sign test on the one-step errors (teacher-forced, true history): consistency = absolute mean of
+      their timing part / its root-mean-square (physical units). Recorded too: the same in time units
+      (one-step lag, positive = behind) and the clock speed it implies (1 - mean lag / time step).
+    rule: >
+      "slow clock" if consistency >= 0.5 AND the straight line fits at least as well as the exponential;
+      "amplifier" if the exponential fits better with a positive growth rate; otherwise "mixed".
+      The sign test needs one-step errors, so models evaluated with direct prediction get the curve
+      shape only.
+    consistency_threshold: 0.5
+    prediction: "slow clock for the full Mamba (guarantee on) under chained training"
+
+  q4_error_correction:
+    method: >
+      On the true limit cycle with zero input, at loop_points points, push the starting state by
+      push_size along the direction of motion (timing push) and across it (shape push). Follow the push
+      for 50 steps with the model and with the true system (same start, same push). At step 50, measure
+      the part of the difference along / across each one's own direction of motion, divided by the push.
+      Shape-push ratio = model's across part / true system's across part; timing-push ratio = model's
+      along part / true system's along part. Median over points.
+      Background: Chung, Choi and Kim (2026) prove that recurrences whose memory update does not depend
+      on the memory cannot correct drift; Mamba is in that class (in its memory), the Long Short-Term
+      Memory network is not. In chained prediction Mamba's outputs feed back into its input, so the
+      result may or may not carry over. This tests it.
+    rule: >
+      shape-push ratio <= 3: "corrects shape errors like the true system";
+      >= 10: "does not correct shape errors"; in between: "partly corrects".
+    good_threshold: 3.0
+    bad_threshold: 10.0
+    prediction: >
+      the full Mamba's shape-push ratio is larger than the Long Short-Term Memory network's, both
+      under chained training (the Mamba corrects shape errors less)
+
+  recorded_only:
+    method: >
+      Following Pervez and Locatello (2026): (1) largest error magnification over the horizon,
+      max over steps k of the largest singular value of d x_hat(C+k) / d x(C), model against the true
+      system along the same window (physical units); (2) for chained models, the full one-step Jacobian
+      of (prediction, memory) at steps 1, 25 and 50: spectral radius, Henrici's departure from normality
+      sqrt(||J||_F^2 - sum |eigenvalue|^2) / ||J||_F (0 = normal, near 1 = strongly non-normal), and
+      Pervez and Locatello's defect ||J^T J - J J^T||_F. In the model's own normalised units.
+
+math_signal:
+  signal: INCONCLUSIVE (for Q1 on the input-driven test windows)
+  what_was_checked: >
+    slow-clock estimate from the measured free-running period (9.02 against 7.27)
+  result: >
+    after 50 steps a 24% slow clock would be about 13% of a loop behind, a step-50 error of about 1.7 on
+    the free-running loop; the measured step-50 error is 0.63, so the input partly pulls the model back
+    into step. a03 (19 October): the certificate cannot constrain the clock at all, so it is no defence.
+  assumptions: >
+    free-running period applies to input-driven windows (it clearly does not fully)
+  implication: >
+    timing drift is the likely main cause, but its size must be measured, not assumed; Q1 settles it
+
+# How Stage 2 feeds Stage 3 (docs/stage2_plan.md), read from the full Mamba with the guarantee on,
+# chained training:
+#   - timing-dominated and slow clock      -> Stage 3 guarantee keeps the clock right (leave timing
+#                                              errors alone, pull shape errors back, memory update that
+#                                              can correct itself)
+#   - amplified by feedback                -> Stage 3 guarantee covers the whole prediction-plus-memory loop
+#   - both                                 -> both

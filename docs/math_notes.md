@@ -81,3 +81,41 @@ Implication:         a usable certificate must (1) be relative to the true syste
                      (2) leave timing errors alone, (3) contract shape errors in a state-dependent metric.
                      Time step choice matters: record it in configs/systems/vanderpol.yaml and match Cevaal et al.
 ```
+
+---
+
+## 19 October 2026 — a03: the latent certificate places no constraint on closed-loop growth or timing
+
+**Script:** `analysis/a03_certificate_places_no_constraint.py` (NumPy only, about a second).
+
+**Question.** Stage 1 found the full Mamba's free-running oscillation about 24% too slow (9.02 against 7.27 time units per loop), with the certificate holding in every run. Could a certificate on the memory decay ever prevent that?
+
+**Model linearised** (same form as a01): memory h_{t+1} = A_bar h_t + B x_t with A_bar diagonal and every entry in (0, 1); prediction x_{t+1} = x_t + C h_{t+1} + D x_t. In chained prediction the loop for (x, h) has the matrix
+
+    J = [ I + D + C B    C A_bar ]
+        [ B              A_bar   ]
+
+**Result 1 — one physical state, one memory, exact.** With scalars, trace = 1 + d + c b + a and determinant = (1 + d) a (the c b terms cancel, as in a01). For any target eigenvalues with sum S and product P (real, or a complex pair):
+
+    d = P / a - 1,     c b = S - P / a - a.
+
+A solution exists for every certified a, because a > 0. With a = 0.5 and the targets 1.78 and -0.28 this rebuilds the research brief's matrix [[1, 1], [1, 0.5]] exactly.
+
+**Result 2 — any size.** With n physical states and m >= n memories, pairing physical state i with memory i (other memories unconnected) splits J into n blocks of size 2 x 2, each solved as in Result 1, plus the unused decay factors. So any n target pairs can be placed for any certified A_bar.
+
+**Link to timing.** An eigenvalue pair r exp(+/- i theta) turns the state by theta per step, so one loop takes 2 pi / theta steps; r sets growth or decay. With the same certified a = 0.9, the script builds loops of 7.27 (true clock) and 9.02 (the full Mamba's slow clock) time units, and growth rates of 0.95, 1.00 and 1.05 per step.
+
+**Checks.** 16 named examples: largest eigenvalue mismatch 8.0e-15. 20,000 random targets (one state, one memory): all placed, worst relative mismatch 1.3e-11. 5,000 random targets with two physical states and sixteen memories: all placed, worst relative mismatch 1.9e-11.
+
+```
+Mathematical signal: POSITIVE (for "the certificate cannot constrain timing or growth")
+What was checked:    closed-loop eigenvalues of the linearised certified cell in chained prediction
+Result:              any eigenvalues (any clock speed, any growth) can be placed for any certified A_bar
+Assumptions:         linearisation; selection (input-dependent A_bar, B, C) held fixed, which only adds
+                     freedom; the full Mamba contains the minimal cell as a special case
+Implication:         the slow clock is not something the certificate could have prevented. A guarantee
+                     that keeps the clock right must constrain the whole prediction-plus-memory loop
+                     (Stage 3), e.g. keep the along-orbit multiplier at 1 and contract across the orbit
+```
+
+**Limits.** This is a possibility result about the linearised loop: it shows the certificate leaves the clock free, not that training will pick a wrong clock. Whether the full Mamba's slow clock comes from feedback amplification or from consistent one-step timing errors is what Stage 2 (Q2, Q3) measures on the trained models.

@@ -4,3 +4,5 @@ __pycache__/
 .DS_Store
 checkpoint*.pt
 .ipynb_checkpoints/
+# trained seed-0 models used by Stage 2 (small, kept so the analysis runs without a training session)
+!models/seed0/**/checkpoint.pt

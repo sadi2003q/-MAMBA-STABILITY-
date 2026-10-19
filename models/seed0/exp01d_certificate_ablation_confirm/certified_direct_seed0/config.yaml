@@ -1,0 +1,111 @@
+device: auto
+output_root: outputs
+data:
+  context_len: 10
+  horizon: 50
+  window_stride: 5
+  input_signal: multisine
+  multisine:
+    f_min: 0.0049
+    f_max: 4.88
+    harmonics: 30
+    peak: 15.0
+    spacing: linear
+  train_samples: 40000
+  val_samples: 10000
+  test_samples: 10000
+  initial_state_low:
+  - -2.5
+  - -2.0
+  initial_state_high:
+  - 2.5
+  - 2.0
+  data_seed: 12345
+training:
+  epochs: 40
+  batch_size: 256
+  lr: 0.001
+  weight_decay: 1.0e-05
+  lr_decay_gamma: 0.97
+  grad_clip: 1.0
+  checkpoint_every: 5
+  clamp_state: 50.0
+  max_nonfinite_fraction: 0.5
+  select_best_on_validation: true
+  regime: direct
+evaluation:
+  report_steps:
+  - 1
+  - 10
+  - 50
+  max_eval_windows: 2000
+  jacobian_windows: 16
+  limit_cycle_steps: 1000
+  limit_cycle_start:
+  - 2.0
+  - 0.0
+run:
+  long_run_confirm_minutes: 30
+system:
+  name: vanderpol
+  mu: 1.0
+  dt: 0.1
+  include_minus_x1: true
+  state_names:
+  - position
+  - velocity
+name: exp01d_certificate_ablation_confirm
+question: Does removing the stability guarantee change how accurate the full Mamba's
+  predictions are?
+hypothesis: 'H1 on the full architecture, eight seeds: removing the latent certificate
+  changes 50-step prediction error by more than 20% under the same training regime.
+
+  '
+math_signal:
+  signal: NEGATIVE for H1 (we expect no difference)
+  what_was_checked: 'Same argument as exp01 and exp01b: a01 shows that stability of
+    chained prediction depends on det(-(D + C (I - A_bar)^(-1) B)), which the latent
+    certificate does not constrain; the loss gradient keeps the decay negative by
+    itself whenever memory growth hurts the fit (exp01: 0% positive after training;
+    exp01b: 0% positive after training).
+
+    '
+  prediction: 'free_sign / certified error ratio has its bootstrap 95% interval inside
+    [0.90, 1.10] in every training method; the decay stays negative in every free_sign
+    run.
+
+    '
+  assumptions: 'Training reaches a similar fit in both arms (same learning rate, chosen
+    on the certified arm only); seed-to-seed spread is small enough for eight seeds
+    to resolve a 10% difference (this is NOT known for chained training of the full
+    Mamba, whose validation loss was noisy in exp01b: if the interval is wider than
+    0.90 to 1.10 the result is "no difference detected", not "shown equivalent").
+
+    '
+decision_rule:
+  type: ablation
+  metric: rollout_rmse
+  threshold_percent: 20
+  equivalence_margin_percent: 10
+model:
+  name: mamba_full
+  d_model: 8
+  d_state: 8
+  d_conv: 10
+  n_layers: 6
+  expand: 1
+  dt_rank: 1
+  dt_min: 0.001
+  dt_max: 0.1
+  bias: true
+  decay_mode: certified
+  unstable_init_scale: 1.0
+  use_parallel_scan: true
+arm:
+  name: certified_direct
+  model: ../models/mamba_full_final.yaml
+  training_regime: direct
+  group: direct
+  role: baseline
+  why: certificate on, full architecture, direct multi-step
+quick_mode: false

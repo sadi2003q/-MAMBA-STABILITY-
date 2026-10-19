@@ -454,6 +454,36 @@ One seed shows direction only. The claim "removing the guarantee changes nothing
     --ask-first no
 ```
 
+### Stage 2 diagnosis (no training, processor only)
+
+What makes the predictions go wrong (plan: `docs/stage2_plan.md`; questions, predictions and rules:
+`configs/analysis/stage2_diagnosis.yaml`). It loads the fifteen seed-0 models stored in `models/seed0/`, so
+no graphics card and no earlier Kaggle output are needed. Estimated time: about 10 to 20 minutes on a
+processor. Run the quick check first (about a minute; its numbers mean nothing).
+
+```bash
+# A. clone (or update)
+!git clone https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- \
+    || git -C /kaggle/working/-MAMBA-STABILITY- pull
+
+# B. theory check (seconds)
+!python /kaggle/working/-MAMBA-STABILITY-/analysis/a03_certificate_places_no_constraint.py
+
+# C. quick code check (a few windows; do not interpret)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/diagnose_errors.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/analysis/stage2_diagnosis.yaml \
+    --quick yes \
+    --device cpu
+
+# D. the real diagnosis
+!python /kaggle/working/-MAMBA-STABILITY-/tools/diagnose_errors.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/analysis/stage2_diagnosis.yaml \
+    --quick no \
+    --device cpu
+```
+
+Results go to `outputs/stage2_diagnosis/` (`summary.md`, `results.csv`, `details.json`, `log.txt`).
+
 Options of `train.py`:
 
 | Option | Values | Default | Meaning |

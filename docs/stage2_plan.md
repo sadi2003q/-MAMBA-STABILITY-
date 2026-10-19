@@ -67,6 +67,12 @@ Each has a method, a prediction and a pass/fail rule, written before running.
   loop).
 - **Payoff:** tests whether their result carries over to continuous, chained prediction — the planned
   "extend Chung et al. to continuous dynamics" item and a possible theory contribution.
+- **Rule (added 19 October, before any result):** shape-push ratio = the model's part across the path
+  after 50 steps divided by the true system's, median over 12 points on the loop. 3 or less: "corrects
+  shape errors like the true system"; 10 or more: "does not correct"; in between: "partly corrects".
+  **Prediction:** the full Mamba's ratio is larger than the Long Short-Term Memory network's (both chained
+  training). Chung et al. measure recovery the same way (push the state, follow the ratio of sizes), but on
+  the memory and on symbolic tasks; they do not test the Long Short-Term Memory network.
 
 ## Theory piece (mathematical check, done by Claude)
 
@@ -106,6 +112,11 @@ Implication:         timing drift is the likely main cause, but its size must be
 5. **In parallel, when graphics-card time allows:** the eight-seed Stage 1 repeat (README step E, about
    8.6 hours); Stage 2 is then rerun on those models to confirm.
 
+**Status (19 October 2026).** Steps 1 and 2 done: `analysis/a03` (run; result in `docs/math_notes.md`),
+`tools/diagnose_errors.py` with its calculations in `src/evaluation/error_diagnosis.py`, settings and rules
+in `configs/analysis/stage2_diagnosis.yaml`, and the fifteen seed-0 models (retrained on Kaggle the same
+day; identical to Stage 1) in `models/seed0/`. Next: Sadi runs README "Stage 2 diagnosis".
+
 ## How Stage 2 feeds Stage 3
 
 - **If timing dominates and grows in a straight line (most likely):** the new guarantee must keep the
@@ -119,8 +130,7 @@ Implication:         timing drift is the likely main cause, but its size must be
 
 A 2026 paper reports that rollout error in learned models of the wake behind a bluff body is "accumulated
 phase drift", and a 2026 sea-temperature result also drifted in phase. So "the error is timing drift" alone
-is not new (only the title of the wake paper could be read; its content still has to be checked). What is
-new here:
+is not new. What is new here:
 
 1. the proof that the guarantee cannot constrain timing;
 2. the mechanism (memory update that does or does not depend on the memory) in the continuous, chained
@@ -128,6 +138,14 @@ new here:
 3. the link to control.
 
 The paper must cite those works and position itself on these three points.
+
+**Wake paper, content checked 19 October 2026** (arXiv 2608.07189): a convolutional autoencoder with a
+Long Short-Term Memory network on cylinder wakes; 97–98% of the error variance is phase, 2% amplitude; the
+phase drifts in a straight line ("one number per latent coordinate: the drift rate"); the fix is a
+post-hoc phase realignment that needs no retraining (41–71% lower error on average). No Mamba, no stability
+certificate, no control. Two consequences: (1) their Long Short-Term Memory network drifts, ours keeps time
+(0.3% period error), so the drift is not a fixed property of a network family; (2) a post-hoc phase
+realignment is a strong, cheap baseline that any Stage 3 method must be compared with.
 
 ## Sources
 
