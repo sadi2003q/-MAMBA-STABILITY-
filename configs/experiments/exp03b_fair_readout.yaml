@@ -1,0 +1,109 @@
+name: exp03b_fair_readout
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Does Chain-Mamba still beat the Long Short-Term Memory network when both get the same read-out (anchor + increment scaling) and the same training recipe?"
+hypothesis: >
+  Chain-Mamba with the rollout recipe has a 50-step chained-prediction error at least 20% lower than a
+  Long Short-Term Memory network given the SAME read-out (linear anchor + increment normalisation) and the
+  SAME recipe, with one-step error no more than 10% worse and no blow-up.
+
+# --------------------------------------------------------------------------------------------
+# Why this experiment exists (written 3 November 2026, before any result):
+#
+# In exp03 the Long Short-Term Memory network arm (lstm_recipe) used the plain read-out:
+#     increment = head(h_t)
+# while Chain-Mamba used the improved read-out:
+#     increment = (head(h_t) + W_skip [x_t, u_t, mask_t]) * increment_scale
+# The anchor (W_skip) and the increment scaling live in src/models/dynamics.py and work with ANY core,
+# not only Mamba. So the exp03 comparison "Chain-Mamba 0.066 vs Long Short-Term Memory network 0.098"
+# mixes two things: the Mamba core changes AND a read-out advantage the other network never got.
+# This experiment gives both networks the same read-out, so only the core differs.
+#
+# All arms run on the same machine (Kaggle graphics card), so no processor-versus-graphics-card difference.
+# --------------------------------------------------------------------------------------------
+math_signal:
+  signal: INCONCLUSIVE (who wins); POSITIVE that the anchor helps the Long Short-Term Memory network
+  what_was_checked: >
+    Least-squares fit of the true Van der Pol one-step increment on [x1, x2, u] in normalised units, on the
+    repository's own training recipe (analysis/a06_anchor_linear_share.py). The linear anchor alone explains
+    100% of the position increment and 78% of the velocity increment. A network with the anchor only has to
+    learn the remaining 22% of one component (the mu * dt * x1^2 * x2 term). Without the anchor, the Long
+    Short-Term Memory network must rebuild the whole linear step through its tanh-bounded hidden state.
+  prediction: >
+    lstm_anchor_recipe has a lower 50-step error than lstm_recipe (the anchor helps any network).
+    The gap between Chain-Mamba and the Long Short-Term Memory network shrinks compared with exp03 (32%).
+    Whether Chain-Mamba stays at least 20% lower is NOT predicted.
+  assumptions: >
+    Training finds the linear part through W_skip (it starts at zero, but receives gradient from step 1);
+    same data, windows, recipe and evaluation code as exp03.
+
+# role: baseline (the fair reference) | proposed | reference | control
+arms:
+  - name: lstm_anchor_recipe
+    model: ../models/lstm_final.yaml
+    training_regime: chained
+    group: chained
+    role: baseline
+    overrides: &recipe_with_readout
+      readout:
+        linear_skip: true
+        increment_normalisation: true
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: >
+      THE FAIR BASELINE. Long Short-Term Memory network with exactly Chain-Mamba's read-out and recipe.
+      Only the recurrent core differs from chain_mamba_recipe.
+
+  - name: chain_mamba_recipe
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: proposed
+    overrides: *recipe_with_readout     # chain_mamba.yaml already turns both read-out options on
+    why: the proposed model from exp03, rerun on the same machine as the fair baseline
+
+  - name: lstm_recipe
+    model: ../models/lstm_final.yaml
+    training_regime: chained
+    group: chained
+    role: reference
+    expected: worse                     # should be more than 20% worse than lstm_anchor_recipe
+    overrides:
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: the exp03 Long Short-Term Memory network (plain read-out), rerun here to measure what the anchor adds
+
+  - name: full_mamba_anchor_recipe
+    model: ../models/mamba_full_final.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides: *recipe_with_readout
+    why: >
+      Unchanged full Mamba plus the same read-out. Separates "the read-out fixes Mamba" from "the
+      Chain-Mamba core changes (SwiGLU, kernel 4, no final norm, margin) fix Mamba". Slowest arm; can be
+      skipped with --arms.
+
+decision_rule:
+  type: proposed
+  metric: rollout_rmse               # root-mean-square error averaged over the 50 chained-prediction steps
+  threshold_percent: 20              # proposed arm must be at least 20% below the baseline arm
+  one_step_tolerance_percent: 10     # and its one-step error no more than 10% worse
