@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from src.systems.vanderpol import VanDerPol
+from src.systems import make_system
 
 
 def multisine(n: int, dt: float, f_min: float, f_max: float, harmonics: int, peak: float,
@@ -63,13 +63,30 @@ class Split:
     starts: np.ndarray     # window start indices into x
 
 
-def _trajectory(system: VanDerPol, n: int, data_cfg: dict, rng: np.random.Generator):
-    ms = data_cfg["multisine"]
-    u = multisine(n, system.dt, ms["f_min"], ms["f_max"], ms["harmonics"], ms["peak"], rng,
-                  ms.get("spacing", "linear"))
+def piecewise_constant(n: int, n_u: int, low, high, hold_min: int, hold_max: int,
+                       rng: np.random.Generator) -> np.ndarray:
+    """Each input channel jumps to a new uniform random level after a random hold of hold_min..hold_max samples."""
+    u = np.empty((n, n_u))
+    for j in range(n_u):
+        k = 0
+        while k < n:
+            hold = int(rng.integers(hold_min, hold_max + 1))
+            u[k:k + hold, j] = rng.uniform(low[j], high[j])
+            k += hold
+    return u
+
+
+def _trajectory(system, n: int, data_cfg: dict, rng: np.random.Generator):
+    if data_cfg.get("input_signal", "multisine") == "piecewise_constant":
+        pc = data_cfg["piecewise_constant"]
+        u = piecewise_constant(n, system.n_u, pc["low"], pc["high"], pc["hold_min"], pc["hold_max"], rng)
+    else:
+        ms = data_cfg["multisine"]
+        u = multisine(n, system.dt, ms["f_min"], ms["f_max"], ms["harmonics"], ms["peak"], rng,
+                      ms.get("spacing", "linear"))[:, None]
     x0 = rng.uniform(data_cfg["initial_state_low"], data_cfg["initial_state_high"])
-    x = system.simulate(x0, u)
-    return x, u[:, None]
+    x = system.simulate(x0, u if u.shape[1] > 1 else u[:, 0])
+    return x, u
 
 
 def _windows(x: np.ndarray, u: np.ndarray, norm: Normaliser, length: int, stride: int,
@@ -86,7 +103,7 @@ def _windows(x: np.ndarray, u: np.ndarray, norm: Normaliser, length: int, stride
 def build_data(cfg: dict) -> dict:
     """Generate train / validation / test splits. Identical for every model seed (data_seed)."""
     data_cfg = cfg["data"]
-    system = VanDerPol.from_config(cfg)
+    system = make_system(cfg)
     rng = np.random.default_rng(data_cfg["data_seed"])
     trajectories = {}
     for split in ("train", "val", "test"):

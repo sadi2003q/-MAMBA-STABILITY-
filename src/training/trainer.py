@@ -244,6 +244,9 @@ def evaluate_model(model, cfg: dict, data: dict, device) -> dict:
                                                     ev["jacobian_windows"], device)
     except Exception as exc:   # a diagnostic must never lose a finished run
         out["amplification"] = {"error": repr(exc)}
+    if not ev.get("limit_cycle_steps") or getattr(data["system"], "n_x", 2) != 2:
+        out["limit_cycle"] = {"status": "not applicable"}
+        return out
     try:
         out["limit_cycle"] = limit_cycle(model, primary, data["norm"], data["system"], C,
                                          ev["limit_cycle_steps"], ev["limit_cycle_start"], device)

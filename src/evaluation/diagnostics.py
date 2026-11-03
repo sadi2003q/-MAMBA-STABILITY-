@@ -56,7 +56,7 @@ def error_amplification(model, regime: str, split, norm, system, context_len: in
                 continue
             s_model = float(np.linalg.svd(J_phys, compute_uv=False)[0])
             x_true = norm.x_inverse(x[0, context_len:context_len + horizon].detach().cpu().numpy())
-            Phi = np.eye(2)
+            Phi = np.eye(J_phys.shape[0])
             for J_t in system.jacobian(x_true):
                 Phi = J_t @ Phi
             s_true = float(np.linalg.svd(Phi, compute_uv=False)[0])

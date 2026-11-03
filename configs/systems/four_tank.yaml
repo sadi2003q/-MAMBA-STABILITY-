@@ -1,0 +1,35 @@
+# Four-tank (quadruple-tank) process, matched to Cevaal, de Jong and Lazar (2026), Section VI.B, Equation 33
+# and Table 5: Sc = 0.06 m^2, a = (1.31e-4, 1.51e-4, 9.27e-5, 8.82e-5) m^2, gamma_a = 0.3, gamma_b = 0.4,
+# g = 9.81 m/s^2, sampling time 5 s, piecewise-constant input in [0, 4] (their MPC input bounds), all four
+# levels measured. Their hold time and initial levels are not reported: hold 10 to 60 samples (50 to 300 s,
+# around the tanks' time constants of about 3 minutes) and initial levels uniform in [0.1, 1.2] m are our
+# choices. They used 80,000 training samples; 40,000 here, to match the Van der Pol set-up and the compute
+# budget (noted in docs/chain_mamba_plan.md).
+
+system:
+  name: four_tank
+  dt: 5.0
+  Sc: 0.06
+  a: [1.31e-4, 1.51e-4, 9.27e-5, 8.82e-5]
+  gamma_a: 0.3
+  gamma_b: 0.4
+  g: 9.81
+  substeps: 10
+  state_names: [level 1, level 2, level 3, level 4]
+
+data:
+  input_signal: piecewise_constant
+  piecewise_constant:
+    low: [0.0, 0.0]
+    high: [4.0, 4.0]
+    hold_min: 10
+    hold_max: 60
+  train_samples: 40000
+  val_samples: 10000
+  test_samples: 10000
+  initial_state_low: [0.1, 0.1, 0.1, 0.1]
+  initial_state_high: [1.2, 1.2, 1.2, 1.2]
+  data_seed: 12345
+
+evaluation:
+  limit_cycle_steps: 0    # no limit cycle in this system: the free-running check is skipped

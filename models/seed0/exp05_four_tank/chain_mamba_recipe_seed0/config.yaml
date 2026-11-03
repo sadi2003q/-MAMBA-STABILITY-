@@ -1,0 +1,145 @@
+device: auto
+output_root: outputs
+data:
+  context_len: 10
+  horizon: 50
+  window_stride: 5
+  input_signal: piecewise_constant
+  piecewise_constant:
+    low:
+    - 0.0
+    - 0.0
+    high:
+    - 4.0
+    - 4.0
+    hold_min: 10
+    hold_max: 60
+  train_samples: 40000
+  val_samples: 10000
+  test_samples: 10000
+  initial_state_low:
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  initial_state_high:
+  - 1.2
+  - 1.2
+  - 1.2
+  - 1.2
+  data_seed: 12345
+training:
+  epochs: 80
+  batch_size: 128
+  lr: 0.002
+  weight_decay: 1.0e-05
+  lr_decay_gamma: 0.97
+  grad_clip: 1.0
+  checkpoint_every: 5
+  clamp_state: 50.0
+  max_nonfinite_fraction: 0.5
+  select_best_on_validation: true
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  rollout_curriculum:
+    start: 5
+    epochs: 25
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  regime: chained
+evaluation:
+  report_steps:
+  - 1
+  - 10
+  - 50
+  max_eval_windows: 2000
+  jacobian_windows: 16
+  limit_cycle_steps: 0
+  limit_cycle_start:
+  - 2.0
+  - 0.0
+run:
+  long_run_confirm_minutes: 30
+system:
+  name: four_tank
+  dt: 5.0
+  Sc: 0.06
+  a:
+  - 0.000131
+  - 0.000151
+  - 9.27e-05
+  - 8.82e-05
+  gamma_a: 0.3
+  gamma_b: 0.4
+  g: 9.81
+  substeps: 10
+  state_names:
+  - level 1
+  - level 2
+  - level 3
+  - level 4
+name: exp05_four_tank
+question: Does Chain-Mamba with the rollout recipe also work on the four-tank system
+  (Cevaal et al., Section VI.B)?
+hypothesis: 'On the four-tank system, Chain-Mamba with the rollout recipe lowers the
+  50-step chained error by at least 20% against the full Mamba trained as in exp01d
+  (full_mamba_old), and is lower than the Long Short-Term Memory network trained with
+  the same recipe.
+
+  '
+math_signal:
+  signal: POSITIVE that it works; INCONCLUSIVE on the margin over the other networks
+  what_was_checked: '(1) The four-tank sample map is contracting: the eigenvalues
+    of its one-sample Jacobian have size 0.96-0.97 at a mid-range operating point,
+    so chained errors are damped by the plant itself and every model should do far
+    better than on Van der Pol. (2) True increments are small: their standard deviation
+    is 0.025-0.030 of each level''s standard deviation (Van der Pol: 0.09 and 0.39),
+    so without increment normalisation the network''s useful output is about 3% of
+    its natural size; the anchor and the scaling should matter more here. (3) The
+    nonlinearity is sqrt(level): smooth away from empty tanks (levels below 1 cm in
+    under 1% of samples). (4) All states are measured, so memory is not needed (same
+    argument as exp04).
+
+    '
+  prediction: 'chain_mamba_recipe at least 20% below full_mamba_old; mlp_recipe within
+    20% of chain_mamba_recipe; the LSTM with the recipe close behind.
+
+    '
+  assumptions: the hold times and initial levels we chose (not reported by Cevaal
+    et al.) give data representative of their set-up; 40,000 training samples instead
+    of their 80,000.
+decision_rule:
+  type: proposed
+  metric: rollout_rmse
+  baseline_arm: full_mamba_old
+  improvement_percent: 20
+  one_step_worse_percent: 10
+model:
+  name: chain_mamba
+  d_model: 12
+  d_state: 8
+  d_conv: 4
+  n_layers: 2
+  expand: 1
+  dt_rank: 1
+  dt_min: 0.06
+  dt_max: 0.5
+  delta_floor: 0.05
+  a_min: 1.0
+  ffn_hidden: 20
+  bias: true
+  final_norm: false
+  use_parallel_scan: true
+readout:
+  linear_skip: true
+  increment_normalisation: true
+arm:
+  name: chain_mamba_recipe
+  model: ../models/chain_mamba.yaml
+  training_regime: chained
+  group: chained
+  role: proposed
+  why: Chain-Mamba + rollout recipe (curriculum on the horizon, one-step loss kept,
+    longer cosine schedule)
+quick_mode: false

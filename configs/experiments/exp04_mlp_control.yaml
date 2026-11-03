@@ -1,0 +1,66 @@
+name: exp04_mlp_control
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Does a memory-free network with the same anchor, read-out and training match Chain-Mamba on Van der Pol?"
+# Result of mlp_recipe (seed 0): 50-step 0.102 against Chain-Mamba's 0.066 -> the prediction did NOT hold.
+# chain_mamba_no_memory was added afterwards to find out whether memory or the SwiGLU layers explain the gap.
+hypothesis: >
+  A parameter-matched multilayer perceptron with no memory, given the same anchor, increment normalisation and
+  rollout recipe, reaches a 50-step chained error within 20% of Chain-Mamba's (0.066, exp03 seed 0).
+
+math_signal:
+  signal: POSITIVE for "the MLP can match" (bad news for a Mamba-specific claim on this system)
+  what_was_checked: >
+    The Van der Pol step is a function of (x_t, u_t) only and all states are measured, so the best possible
+    chained predictor needs no memory. Chain-Mamba's trained memory is short (median decay 0.50-0.55, largest
+    0.89) and the no-margin variant did as well with a slow memory, so memory is probably not doing the work.
+  prediction: MLP 50-step error within 20% of 0.066; one-step error similar (about 0.013).
+  assumptions: the MLP's smooth SiLU layers fit x1^2 x2 as well as SwiGLU at this size (not checked).
+
+arms:
+  - name: mlp_recipe
+    model: ../models/mlp.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: no memory at all; same anchor, read-out and recipe as chain_mamba_recipe (exp03)
+
+  - name: chain_mamba_no_memory
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: {mixer: false, ffn_hidden: 44}     # 3,286 parameters: the two SwiGLU layers only, no memory
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: >
+      Chain-Mamba with the selective state-space mixer removed (added 3 November 2026, after mlp_recipe's
+      result): separates "memory" from "SwiGLU layers" when Chain-Mamba beats the plain multilayer perceptron
+
+decision_rule:
+  type: ablation
+  metric: rollout_rmse
+  baseline_value: 0.0664       # chain_mamba_recipe, exp03 seed 0
+  threshold_percent: 20

@@ -1,0 +1,105 @@
+device: auto
+output_root: outputs
+data:
+  context_len: 10
+  horizon: 50
+  window_stride: 5
+  input_signal: multisine
+  multisine:
+    f_min: 0.0049
+    f_max: 4.88
+    harmonics: 30
+    peak: 15.0
+    spacing: linear
+  train_samples: 40000
+  val_samples: 10000
+  test_samples: 10000
+  initial_state_low:
+  - -2.5
+  - -2.0
+  initial_state_high:
+  - 2.5
+  - 2.0
+  data_seed: 12345
+training:
+  epochs: 80
+  batch_size: 128
+  lr: 0.002
+  weight_decay: 1.0e-05
+  lr_decay_gamma: 0.97
+  grad_clip: 1.0
+  checkpoint_every: 5
+  clamp_state: 50.0
+  max_nonfinite_fraction: 0.5
+  select_best_on_validation: true
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  rollout_curriculum:
+    start: 5
+    epochs: 25
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  regime: chained
+evaluation:
+  report_steps:
+  - 1
+  - 10
+  - 50
+  max_eval_windows: 2000
+  jacobian_windows: 16
+  limit_cycle_steps: 1000
+  limit_cycle_start:
+  - 2.0
+  - 0.0
+run:
+  long_run_confirm_minutes: 30
+system:
+  name: vanderpol
+  mu: 1.0
+  dt: 0.1
+  include_minus_x1: true
+  state_names:
+  - position
+  - velocity
+name: exp04_mlp_control
+question: Does a memory-free network with the same anchor, read-out and training match
+  Chain-Mamba on Van der Pol?
+hypothesis: 'A parameter-matched multilayer perceptron with no memory, given the same
+  anchor, increment normalisation and rollout recipe, reaches a 50-step chained error
+  within 20% of Chain-Mamba''s (0.066, exp03 seed 0).
+
+  '
+math_signal:
+  signal: POSITIVE for "the MLP can match" (bad news for a Mamba-specific claim on
+    this system)
+  what_was_checked: 'The Van der Pol step is a function of (x_t, u_t) only and all
+    states are measured, so the best possible chained predictor needs no memory. Chain-Mamba''s
+    trained memory is short (median decay 0.50-0.55, largest 0.89) and the no-margin
+    variant did as well with a slow memory, so memory is probably not doing the work.
+
+    '
+  prediction: MLP 50-step error within 20% of 0.066; one-step error similar (about
+    0.013).
+  assumptions: the MLP's smooth SiLU layers fit x1^2 x2 as well as SwiGLU at this
+    size (not checked).
+decision_rule:
+  type: ablation
+  metric: rollout_rmse
+  baseline_value: 0.0664
+  threshold_percent: 20
+model:
+  name: mlp
+  hidden: 54
+  layers: 2
+readout:
+  linear_skip: true
+  increment_normalisation: true
+arm:
+  name: mlp_recipe
+  model: ../models/mlp.yaml
+  training_regime: chained
+  group: chained
+  role: control
+  why: no memory at all; same anchor, read-out and recipe as chain_mamba_recipe (exp03)
+quick_mode: false

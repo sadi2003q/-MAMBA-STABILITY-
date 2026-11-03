@@ -75,6 +75,8 @@ def main():
     data = build_data(first_cfg)
     C, H = data["context_len"], data["horizon"]
     test, norm, system = data["splits"]["test"], data["norm"], data["system"]
+    has_cycle = getattr(system, "n_x", 2) == 2          # the free-running limit-cycle check is for Van der Pol
+    names = first_cfg["system"].get("state_names", [f"x{i + 1}" for i in range(system.n_x)])
 
     rows, curves, examples, cycles = [], {}, {}, {}
     w = args.window
@@ -82,7 +84,8 @@ def main():
     for label, path in runs:
         cfg, model = load(path, data)
         r = rollout_errors(model, "chained", test, norm, C, H, device)
-        lc = limit_cycle(model, "chained", norm, system, C, 1000, [2.0, 0.0], device)
+        lc = (limit_cycle(model, "chained", norm, system, C, 1000, [2.0, 0.0], device) if has_cycle
+              else {"status": "not applicable"})
         with torch.no_grad():
             pred, _ = model.chained(xw[:, :C + 1], uw, H)
         examples[label] = norm.x_inverse(pred[0].numpy())
@@ -125,10 +128,18 @@ def main():
     fig, ax = plt.subplots(figsize=(7.2, 4.2), dpi=150)
     for label, _ in runs:
         ax.plot(steps, curves[label], color=colour[label], linewidth=2, label=label)
-        ax.annotate(f"{curves[label][-1]:.3f}", (H, curves[label][-1]), xytext=(4, 0),
-                    textcoords="offset points", va="center", fontsize=8, color=INK)
+    # end labels, 3 significant figures, pushed apart (log scale) so they never overlap
+    ends = sorted(((curves[label][-1], label) for label, _ in runs))
+    placed = []
+    for value, label in ends:
+        y = np.log10(value)
+        if placed and y - placed[-1] < 0.07:
+            y = placed[-1] + 0.07
+        placed.append(y)
+        ax.annotate(f"{value:.3g}", (H, value), xytext=(H + 1, 10 ** y), textcoords="data",
+                    va="center", fontsize=8, color=INK)
     ax.set_yscale("log")
-    ax.set_xlabel("prediction step (time step 0.1)", fontsize=9, color=INK)
+    ax.set_xlabel(f"prediction step (time step {system.dt:g})", fontsize=9, color=INK)
     ax.set_ylabel("root-mean-square error (log scale)", fontsize=9, color=INK)
     ax.set_title("Chained prediction error over the horizon, test windows", fontsize=10, color=INK, loc="left")
     style(ax)
@@ -141,8 +152,8 @@ def main():
     # 2. one example window
     true = norm.x_inverse(xw[0, C + 1:C + 1 + H].numpy())
     ctx = norm.x_inverse(xw[0, :C + 1].numpy())
-    fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.0), dpi=150, sharex=True)
-    for k, (ax, name) in enumerate(zip(axes, ["position x1", "velocity x2"])):
+    fig, axes = plt.subplots(len(names), 1, figsize=(7.2, 2.5 * len(names)), dpi=150, sharex=True)
+    for k, (ax, name) in enumerate(zip(axes, names)):
         ax.plot(np.arange(-C, 1), ctx[:, k], color=MUTED, linewidth=1.5, label="true context (given)")
         ax.plot(steps, true[:, k], color=INK, linewidth=2, linestyle="--", label="true")
         for label, _ in runs:
@@ -151,11 +162,15 @@ def main():
         style(ax)
     axes[0].set_title(f"Test window {w}: 50-step chained prediction from the true state at step 0",
                       fontsize=10, color=INK, loc="left")
-    axes[1].set_xlabel("step", fontsize=9, color=INK)
+    axes[-1].set_xlabel("step", fontsize=9, color=INK)
     axes[0].legend(frameon=False, fontsize=7, ncol=2, loc="best")
     fig.tight_layout()
     fig.savefig(out / "example_window.png")
     plt.close(fig)
+
+    if not has_cycle:
+        print(f"\nFigures and tables in {out}")
+        return
 
     # 3. free running, zero input
     x = np.empty((1001, 2))

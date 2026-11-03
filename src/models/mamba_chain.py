@@ -66,23 +66,26 @@ class MarginDecay(nn.Module):
 
 class ChainMambaLayer(nn.Module):
     def __init__(self, d_model: int, d_state: int, d_conv: int, expand: int, dt_rank: int, dt_min: float,
-                 dt_max: float, delta_floor: float, a_min: float, ffn_hidden: int, bias: bool):
+                 dt_max: float, delta_floor: float, a_min: float, ffn_hidden: int, bias: bool,
+                 mixer: bool = True):
         super().__init__()
         E = expand * d_model
+        self.mixer = bool(mixer)
         self.E, self.d_state, self.d_conv, self.dt_rank = E, d_state, d_conv, dt_rank
         self.delta_floor = float(delta_floor)
-        # selective state-space mixer
-        self.norm = RMSNorm(d_model)
-        self.in_proj = nn.Linear(d_model, 2 * E, bias=bias)
-        self.conv_weight = nn.Parameter(torch.empty(E, d_conv))
-        self.conv_bias = nn.Parameter(torch.zeros(E))
-        nn.init.uniform_(self.conv_weight, -1.0 / math.sqrt(d_conv), 1.0 / math.sqrt(d_conv))
-        self.x_proj = nn.Linear(E, dt_rank + 2 * d_state, bias=False)
-        self.dt_proj = nn.Linear(dt_rank, E)
-        self._init_dt(dt_min, dt_max)
-        self.decay = MarginDecay(E, d_state, a_min)
-        self.D = nn.Parameter(torch.ones(E))
-        self.out_proj = nn.Linear(E, d_model, bias=bias)
+        if self.mixer:
+            # selective state-space mixer
+            self.norm = RMSNorm(d_model)
+            self.in_proj = nn.Linear(d_model, 2 * E, bias=bias)
+            self.conv_weight = nn.Parameter(torch.empty(E, d_conv))
+            self.conv_bias = nn.Parameter(torch.zeros(E))
+            nn.init.uniform_(self.conv_weight, -1.0 / math.sqrt(d_conv), 1.0 / math.sqrt(d_conv))
+            self.x_proj = nn.Linear(E, dt_rank + 2 * d_state, bias=False)
+            self.dt_proj = nn.Linear(dt_rank, E)
+            self._init_dt(dt_min, dt_max)
+            self.decay = MarginDecay(E, d_state, a_min)
+            self.D = nn.Parameter(torch.ones(E))
+            self.out_proj = nn.Linear(E, d_model, bias=bias)
         # gated feed-forward (SwiGLU): per-step products between features
         self.ffn = ffn_hidden > 0
         if self.ffn:
@@ -119,6 +122,8 @@ class ChainMambaLayer(nn.Module):
 
     # --------------------------------------------------------------------- forward
     def sequence(self, x, state=None, parallel: bool = True):
+        if not self.mixer:                       # control: no memory, feed-forward layer only
+            return self._ffn(x), None
         Bsz = x.shape[0]
         xi, z = self.in_proj(self.norm(x)).chunk(2, dim=-1)
         if state is None:
@@ -135,6 +140,8 @@ class ChainMambaLayer(nn.Module):
 
     def step(self, x, state=None):
         """One time step without building length-1 sequences. x [B, d_model]."""
+        if not self.mixer:
+            return self._ffn(x), None
         Bsz = x.shape[0]
         xi, z = self.in_proj(self.norm(x)).chunk(2, dim=-1)
         if state is None:
@@ -160,13 +167,13 @@ class ChainMambaCore(nn.Module):
     def __init__(self, in_dim: int, d_model: int = 16, d_state: int = 8, d_conv: int = 4, n_layers: int = 2,
                  expand: int = 1, dt_rank: int = 1, dt_min: float = 0.06, dt_max: float = 0.5,
                  delta_floor: float = 0.05, a_min: float = 1.0, ffn_hidden: int = 24, bias: bool = True,
-                 final_norm: bool = False, use_parallel_scan: bool = True):
+                 final_norm: bool = False, use_parallel_scan: bool = True, mixer: bool = True):
         super().__init__()
         self.use_parallel_scan = use_parallel_scan
         self.embed = nn.Linear(in_dim, d_model)
         self.layers = nn.ModuleList([
             ChainMambaLayer(d_model, d_state, d_conv, expand, dt_rank, dt_min, dt_max, delta_floor, a_min,
-                            ffn_hidden, bias) for _ in range(n_layers)])
+                            ffn_hidden, bias, mixer) for _ in range(n_layers)])
         self.norm_f = RMSNorm(d_model) if final_norm else nn.Identity()
         self.out_dim = d_model
 
@@ -190,7 +197,7 @@ class ChainMambaCore(nn.Module):
         return self.norm_f(h), new_state
 
     def decay_modules(self):
-        return [layer.decay for layer in self.layers]
+        return [layer.decay for layer in self.layers if layer.mixer]
 
     def rho_max(self) -> float:
-        return max(layer.rho_max() for layer in self.layers)
+        return max((layer.rho_max() for layer in self.layers if layer.mixer), default=0.0)

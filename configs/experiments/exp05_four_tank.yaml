@@ -1,0 +1,143 @@
+name: exp05_four_tank
+inherit: [../base.yaml, ../systems/four_tank.yaml]
+
+question: "Does Chain-Mamba with the rollout recipe also work on the four-tank system (Cevaal et al., Section VI.B)?"
+hypothesis: >
+  On the four-tank system, Chain-Mamba with the rollout recipe lowers the 50-step chained error by at least 20%
+  against the full Mamba trained as in exp01d (full_mamba_old), and is lower than the Long Short-Term Memory
+  network trained with the same recipe.
+
+# Same arms, recipe and evaluation as exp03 (Van der Pol), plus the full Mamba with the old training as the
+# baseline and the memory-free multilayer perceptron as a control. Seed 0 first (direction only).
+math_signal:
+  signal: POSITIVE that it works; INCONCLUSIVE on the margin over the other networks
+  what_was_checked: >
+    (1) The four-tank sample map is contracting: the eigenvalues of its one-sample Jacobian have size
+    0.96-0.97 at a mid-range operating point, so chained errors are damped by the plant itself and every model
+    should do far better than on Van der Pol. (2) True increments are small: their standard deviation is
+    0.025-0.030 of each level's standard deviation (Van der Pol: 0.09 and 0.39), so without increment
+    normalisation the network's useful output is about 3% of its natural size; the anchor and the scaling should
+    matter more here. (3) The nonlinearity is sqrt(level): smooth away from empty tanks (levels below 1 cm in
+    under 1% of samples). (4) All states are measured, so memory is not needed (same argument as exp04).
+  prediction: >
+    chain_mamba_recipe at least 20% below full_mamba_old; mlp_recipe within 20% of chain_mamba_recipe;
+    the LSTM with the recipe close behind.
+  assumptions: the hold times and initial levels we chose (not reported by Cevaal et al.) give data
+    representative of their set-up; 40,000 training samples instead of their 80,000.
+
+arms:
+  - name: full_mamba_old
+    model: ../models/mamba_full_final.yaml
+    training_regime: chained
+    group: chained
+    role: baseline
+    why: the current approach (exp01d training, chained)
+
+  - name: chain_mamba_recipe
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: proposed
+    overrides: &recipe
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: Chain-Mamba + rollout recipe (curriculum on the horizon, one-step loss kept, longer cosine schedule)
+
+  - name: chain_mamba_old_recipe
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    why: architecture alone, trained exactly like exp01d (40 epochs, batch 256, learning rate 0.001, decay 0.97)
+
+  - name: full_mamba_recipe
+    model: ../models/mamba_full_final.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides: *recipe
+    why: recipe alone on the unchanged full Mamba (about 2.3 times slower per step than Chain-Mamba)
+
+  - name: chain_mamba_no_margin
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: {delta_floor: 0.0, a_min: 0.0, dt_min: 0.001, dt_max: 0.1}
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: removes only the memory margin (standard Mamba step-size range and decay), everything else as proposed
+
+  - name: mlp_recipe
+    model: ../models/mlp.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: {hidden: 52}
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: memory-free control with the same anchor, read-out and recipe
+
+  - name: chain_mamba_no_memory
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: {mixer: false, ffn_hidden: 44}
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: Chain-Mamba with the selective state-space mixer removed (added 3 November 2026, same as exp04)
+
+  - name: lstm_recipe
+    model: ../models/lstm_final.yaml
+    training_regime: chained
+    group: chained
+    role: reference
+    overrides: *recipe
+    why: fair reference, the Long Short-Term Memory network with the same recipe
+
+decision_rule:
+  type: proposed
+  metric: rollout_rmse
+  baseline_arm: full_mamba_old
+  improvement_percent: 20
+  one_step_worse_percent: 10

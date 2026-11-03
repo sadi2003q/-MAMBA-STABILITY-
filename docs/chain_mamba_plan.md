@@ -176,6 +176,78 @@ Figures (`tools/compare_runs.py`): `docs/evidence/exp03_chain_mamba/error_vs_ste
 
 ---
 
+## 7b. Follow-up (3 November 2026, evening): memory-free controls and the four-tank system, seed 0
+
+Two checks were requested: (1) does a network with **no memory** do as well? (2) does it work on another
+system? For (2) the four-tank system from Cevaal et al. (Section VI.B, Equation 33, Table 5) was added to the
+code. The new files are `src/systems/four_tank.py` and `configs/systems/four_tank.yaml`. It uses 4 measured
+levels, 2 pump inputs in [0, 4], a 5 s sample time, and a piecewise-constant input held for 10 to 60
+samples. There are 40,000 training samples (Cevaal et al. used 80,000). The windows, horizon (50 steps =
+250 s), recipe and evaluation are the same as for Van der Pol. Configs: `exp04_mlp_control.yaml` and
+`exp05_four_tank.yaml`.
+
+Two memory-free controls, both with the same anchor, read-out scaling and recipe:
+- **MLP**: a plain multilayer perceptron (2 SiLU layers), 3,358 / 3,412 parameters.
+- **Chain-Mamba, memory removed**: Chain-Mamba with the selective state-space mixer switched off
+  (`mixer: false`), leaving residual SwiGLU layers only, 3,286 / 3,368 parameters. This arm was added
+  *after* seeing the MLP result, to find out what explains the gap.
+
+**Van der Pol** (50-step chained error, average over the horizon; smaller is better)
+
+| Model | 1-step | 50-step (at step) | 50-step (average) |
+|---|---|---|---|
+| Full Mamba, old training (exp01d) | 0.0939 | 0.6261 | 0.4650 |
+| MLP + recipe | 0.0206 | 0.1357 | 0.1021 |
+| LSTM + recipe | 0.0346 | 0.1324 | 0.0980 |
+| Chain-Mamba + recipe | 0.0135 | 0.0948 | 0.0664 |
+| Chain-Mamba, no margin + recipe | 0.0133 | 0.0772 | 0.0539 |
+| **Chain-Mamba, memory removed + recipe** | **0.0116** | **0.0691** | **0.0484** |
+
+**Four-tank** (levels in metres; level standard deviation about 0.4 m)
+
+| Model | Params | 1-step | 50-step (at step) | 50-step (average) | vs full Mamba |
+|---|---|---|---|---|---|
+| Full Mamba, old training | 3,324 | 0.00610 | 0.02835 | 0.02200 | — |
+| MLP + recipe | 3,412 | 0.00036 | 0.00556 | 0.00437 | −80% |
+| LSTM + recipe | 3,504 | 0.00060 | 0.00425 | 0.00337 | −85% |
+| Chain-Mamba + recipe | 3,392 | 0.00023 | 0.00309 | 0.00242 | −89% |
+| Chain-Mamba, no margin + recipe | 3,392 | 0.00023 | 0.00310 | 0.00243 | −89% |
+| **Chain-Mamba, memory removed + recipe** | 3,368 | **0.00021** | **0.00295** | **0.00229** | **−90%** |
+
+Figures: `docs/evidence/exp04_mlp_control/` and `docs/evidence/exp05_four_tank/` (`error_vs_step.png`,
+`example_window.png`).
+
+**What this means**
+- **It carries over to a second system.** On the four-tank system the ordering is the same as on Van der Pol.
+  Chain-Mamba is 89% below the full Mamba trained the old way and 28% below the LSTM trained the same way.
+  The margin makes no difference there (0.00242 vs 0.00243).
+- **A plain MLP does not match it** (Van der Pol 0.102 vs 0.066; four-tank 0.0044 vs 0.0024). So the
+  prediction in exp04 (MLP within 20%) did not hold.
+- **But Chain-Mamba without its memory matches or beats Chain-Mamba on both systems** (0.048 vs 0.066;
+  0.0023 vs 0.0024). The gain comes from the residual SwiGLU layers, the anchor, the output scaling and the
+  recipe, **not** from Mamba's selective memory. This is expected for these two systems. Both are fully
+  measured and Markov (the next state depends only on the current state and input), so the best chained
+  predictor needs no memory at all.
+- The four-tank system damps its own errors (true 50-step error magnification 0.52; Van der Pol 2.5).
+  Errors there are small for every model, and the differences between the recipe-trained models are
+  smaller than on Van der Pol.
+- One seed. The seed-to-seed spread seen on Van der Pol (0.066 vs 0.057 for the same arm) is about 15%,
+  so "memory removed is as good as Chain-Mamba" is safe to say, but "better" is not shown.
+
+**Consequence for a paper.** "Mamba works for chained prediction" is not supported as a Mamba claim on
+fully measured systems: the same network without the Mamba layer is as good. What *is* supported on two
+systems is:
+- training on chained predictions with a horizon curriculum, plus a state anchor and gated feed-forward
+  layers, cuts chained error by about 90% at a matched parameter count;
+- it beats a parameter-matched LSTM given the same training;
+- the stability guarantee, with or without a margin, plays no part.
+
+For Mamba's memory to earn its place, the test must be a system where memory is *needed*: only some states
+measured (for example Van der Pol with x1 only, or the Quanser Aero2 outputs), or delays. That is now the
+deciding experiment.
+
+---
+
 ## 8. Honest limits
 
 1. Two seeds for the recipe arms, one for the controls. Nothing here is significant until seeds 0–7.
@@ -210,7 +282,14 @@ signal-to-noise ratio 20. Compare it against the full Mamba and the LSTM, in bot
 Cevaal's direct form. Warm-start the memory from the last 10 measured states. Pass if tracking error is
 lower and solve time stays below the 0.1 s sampling time.
 
-**Step D — Second system.** Four-tank system (Cevaal et al., Section VI.B), same recipe, same rule.
+**Step D — Second system.** Done on seed 0 (Section 7b): it carries over. Eight seeds still needed.
+
+**Step D2 — Partially measured system (now the deciding experiment for a Mamba-specific claim).** Van der
+Pol with only x1 measured (the model sees x1 and u, predicts x1), and the four-tank system with only levels
+1 and 2 measured (Cevaal et al.'s usual outputs). Arms: Chain-Mamba, Chain-Mamba with memory removed (given
+the last 4 measurements as input, so it is not handicapped unfairly), LSTM, all with the recipe. Rule
+(written now): Chain-Mamba must be at least 20% below the memory-removed control on both systems for the
+memory to count as a contribution.
 
 **Step E — Back to the research question.** The certificate (with or without margin) is not what makes
 chained prediction work. Training on chained predictions plus a state anchor is. This supports the

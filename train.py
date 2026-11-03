@@ -88,7 +88,7 @@ def write_settings_to_log(log, exp, first_cfg, data, seeds, device, out, quick):
     log.detail(f"Experiment : {exp['name']}  (quick run: {quick})")
     log.detail(f"Hypothesis : {exp['hypothesis'].strip()}")
     log.detail(f"Device     : {describe(device)}")
-    log.detail(f"System     : {first_cfg['system']['name']}, mu = {first_cfg['system']['mu']}, "
+    log.detail(f"System     : {first_cfg['system']['name']}, mu = {first_cfg['system'].get('mu', '-')}, "
                f"time step = {first_cfg['system']['dt']}")
     log.detail(f"Data       : {n_train} training windows, {n_val} validation, {n_test} test; "
                f"context {data['context_len']} steps, horizon {data['horizon']} steps")

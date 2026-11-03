@@ -1,0 +1,12 @@
+# Memory-free multilayer perceptron (src/models/mlp_dynamics.py): increment from [x_t, u_t, mask_t] only.
+# Same read-out as Chain-Mamba (anchor + increment normalisation). Van der Pol: hidden 54, 2 layers ->
+# 3,358 parameters (Chain-Mamba 3,310). Four-tank: hidden 52 -> 3,412 (Chain-Mamba 3,392).
+
+model:
+  name: mlp
+  hidden: 54
+  layers: 2
+
+readout:
+  linear_skip: true
+  increment_normalisation: true

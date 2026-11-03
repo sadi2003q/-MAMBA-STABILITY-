@@ -521,6 +521,27 @@ earlier experiments are unchanged. Seed-0 models are stored in `models/seed0/exp
     --ask-first no
 ```
 
+Follow-up experiments (same recipe): `configs/experiments/exp04_mlp_control.yaml` (memory-free controls on
+Van der Pol) and `configs/experiments/exp05_four_tank.yaml` (the four-tank system from Cevaal et al., new
+system file `src/systems/four_tank.py`). Run them exactly like exp03; results are in the plan, Section 7b.
+
+### Reproduce the Chain-Mamba seed-0 results (Phase 0 of `docs/Chain-Mamba_paper_plan.pdf`)
+
+The exp03–exp05 numbers came from a processor run. Before any eight-seed run, reproduce them on the Kaggle
+graphics card. Pass rule: every 50-step error within 10% of the reported value (`tools/check_reproduction.py`).
+Part 1 also runs the fair test (exp03b: the Long Short-Term Memory network with the same anchor).
+
+```bash
+!git clone -b chain-mamba https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY- \
+    || git -C /kaggle/working/-MAMBA-STABILITY- pull
+
+# everything (tests + 3 parts + check), about 2-3 hours on a T4
+!bash /kaggle/working/-MAMBA-STABILITY-/scripts/reproduce_seed0.sh all
+
+# or one part per session: 1 (Van der Pol main), 2 (memory-free controls), 3 (four-tank), check
+!bash /kaggle/working/-MAMBA-STABILITY-/scripts/reproduce_seed0.sh 1
+```
+
 Figures and the side-by-side table: `tools/compare_runs.py`; memory decay factors of any trained model:
 `tools/diagnose_memory_margin.py` (commands in the plan, Section 10).
 
