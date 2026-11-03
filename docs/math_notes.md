@@ -119,3 +119,20 @@ Implication:         the slow clock is not something the certificate could have 
 ```
 
 **Limits.** This is a possibility result about the linearised loop: it shows the certificate leaves the clock free, not that training will pick a wrong clock. Whether the full Mamba's slow clock comes from feedback amplification or from consistent one-step timing errors is what Stage 2 (Q2, Q3) measures on the trained models.
+
+## 3 November 2026 — a05: when a decay margin matters for chained prediction
+
+```
+Mathematical signal: POSITIVE (predicted the margin helps) — DISAGREED with exp03 seed 0
+What was checked:    scalar augmented error recursion e_x' = j e_x + c e_h + eps, e_h' = rho e_h + c e_x
+Result:              growth per step = largest eigenvalue of [[j, c], [c, rho]]. With j = 1: rho -> 1 gives
+                     1 + c (coupling enters linearly); margin m = 1 - rho >> c gives about 1 + c^2/m
+                     (quadratically). c = 0.05: 1.0495 at rho 0.999 vs 1.0312 at rho 0.951; constant one-step
+                     mistake summed over 50 steps: 113 vs 88 (50 = no leak)
+Assumptions:         linearisation near the true trajectory; same coupling c in both models
+Implication:         a margin can only help when the coupling c is large. exp03: the model without margin
+                     (slow memory, largest decay 0.9986) had the LOWER chained error, so chained training
+                     keeps c small on its own. The margin is a guarantee, not an accuracy fix.
+```
+
+Script: `analysis/a05_memory_margin_leak.py`.

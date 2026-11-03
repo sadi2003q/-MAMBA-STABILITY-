@@ -29,8 +29,44 @@ def make_optimizer(model, cfg: dict):
     t = cfg["training"]
     opt = torch.optim.Adam([{"params": decay, "weight_decay": t["weight_decay"]},
                             {"params": no_decay, "weight_decay": 0.0}], lr=t["lr"])
-    sched = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=t["lr_decay_gamma"])
+    if t.get("lr_schedule", "exponential") == "cosine":
+        # linear warm-up for `warmup_epochs`, then cosine decay to lr * lr_final_fraction (stepped per epoch)
+        epochs, warm = int(t["epochs"]), int(t.get("warmup_epochs", 0))
+        final = float(t.get("lr_final_fraction", 0.01))
+
+        def factor(epoch: int) -> float:
+            if epoch < warm:
+                return (epoch + 1) / (warm + 1)
+            progress = (epoch - warm) / max(1, epochs - warm)
+            return final + (1.0 - final) * 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, factor)
+    else:
+        sched = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=t["lr_decay_gamma"])
     return opt, sched
+
+
+def rollout_options(t_cfg: dict, epoch: int, horizon: int) -> dict:
+    """Chained-training options for this epoch (all off unless set in the training config).
+
+    rollout_curriculum: {start: 5, epochs: 20}  roll out `start` steps in the first epoch, growing linearly to
+                                                the full horizon by epoch `epochs` (scheduled lengthening of the
+                                                truncated simulation loss)
+    state_noise_std: 0.0                        noise on fed-back states, normalised units
+    teacher_aux_weight: 0.0                     weight of an added one-step teacher-forced loss
+    """
+    opts = {"noise_std": float(t_cfg.get("state_noise_std", 0.0)),
+            "teacher_weight": float(t_cfg.get("teacher_aux_weight", 0.0))}
+    cur = t_cfg.get("rollout_curriculum")
+    if cur:
+        start, n = int(cur.get("start", 1)), max(1, int(cur.get("epochs", 1)))
+        opts["train_horizon"] = int(round(start + (horizon - start) * min(1.0, epoch / n)))
+    return opts
+
+
+def attach_data_statistics(model, data: dict) -> None:
+    """Give the model the training-data statistics some read-outs need (no-op for the others)."""
+    if getattr(model, "increment_normalisation", False) and "increment_std" in data:
+        model.set_increment_scale(data["increment_std"])
 
 
 def _batches(n: int, batch_size: int, generator: torch.Generator):
@@ -59,6 +95,7 @@ def time_batches(cfg: dict, data: dict, device, n_batches: int = 3) -> float:
     """Seconds per training batch (after one warm-up batch). Used for the run-time estimate."""
     set_seed(0)
     model = build_model(cfg).to(device)
+    attach_data_statistics(model, data)
     opt, _ = make_optimizer(model, cfg)
     split = data["splits"]["train"]
     bs = cfg["training"]["batch_size"]
@@ -93,6 +130,7 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
 
     set_seed(seed)
     model = build_model(cfg).to(device)
+    attach_data_statistics(model, data)
     opt, sched = make_optimizer(model, cfg)
     gen = torch.Generator().manual_seed(seed)
 
@@ -127,10 +165,11 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
         t0 = time.time()
         model.train()
         loss_sum, steps, nonfinite = 0.0, 0, 0
+        opts = rollout_options(t_cfg, epoch, H) if regime == "chained" else {}
         for idx in _batches(n_train, t_cfg["batch_size"], gen):
             x, u = split.xw[idx].to(device), split.uw[idx].to(device)
             opt.zero_grad(set_to_none=True)
-            loss, _ = regime_loss(model, x, u, regime, C, H)
+            loss, _ = regime_loss(model, x, u, regime, C, H, **opts)
             steps += 1
             if not torch.isfinite(loss):
                 nonfinite += 1
@@ -154,6 +193,7 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
         train_loss = loss_sum / max(steps - nonfinite, 1)
         train_seconds += time.time() - t0
         log_rows.append({"epoch": epoch + 1, "train_loss": train_loss, "val_loss": val,
+                         "train_horizon": opts.get("train_horizon", H if regime == "chained" else ""),
                          "lr": opt.param_groups[0]["lr"], "nonfinite_steps": nonfinite,
                          "seconds": round(time.time() - t0, 2)})
         # Show only the two loss numbers on the bar; the full row is saved in train_log.csv

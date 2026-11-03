@@ -104,5 +104,8 @@ def build_data(cfg: dict) -> dict:
     for split, (x, u) in trajectories.items():
         xw, uw, starts = _windows(x, u, norm, length, stride, limits[split], win_rng)
         splits[split] = Split(x=x, u=u, xw=xw, uw=uw, starts=starts)
-    return {"system": system, "norm": norm, "splits": splits,
+    # Standard deviation of the true one-step increments in normalised units (training trajectory only);
+    # used by the optional increment normalisation of the read-out.
+    increment_std = np.diff(norm.x(x_tr), axis=0).std(0)
+    return {"system": system, "norm": norm, "splits": splits, "increment_std": increment_std,
             "context_len": int(data_cfg["context_len"]), "horizon": int(data_cfg["horizon"])}

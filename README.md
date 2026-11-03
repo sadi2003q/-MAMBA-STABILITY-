@@ -495,6 +495,35 @@ Stage 2b follow-up (a few minutes, processor only):
 
 Results go to `outputs/stage2b_followup/`.
 
+### exp03 — Chain-Mamba for chained prediction
+
+Plan, diagnosis, results and next steps: `docs/chain_mamba_plan.md`. New model `chain_mamba`
+(`src/models/mamba_chain.py`), new read-out options (`readout:` in the config) and new chained-training options
+(`rollout_curriculum`, `teacher_aux_weight`, `state_noise_std`, `lr_schedule: cosine`); all are off by default, so
+earlier experiments are unchanged. Seed-0 models are stored in `models/seed0/exp03_chain_mamba/`.
+
+```bash
+# checks (seconds)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/check_model.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp03_chain_mamba.yaml
+
+# main comparison, one seed (T4: under an hour; full_mamba_recipe alone adds about 1-2 hours)
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp03_chain_mamba.yaml \
+    --arms chain_mamba_recipe chain_mamba_no_margin lstm_recipe \
+    --seed 0 \
+    --ask-first no
+
+# Step A of the plan: eight seeds, every arm
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp03_chain_mamba.yaml \
+    --seeds 0 1 2 3 4 5 6 7 \
+    --ask-first no
+```
+
+Figures and the side-by-side table: `tools/compare_runs.py`; memory decay factors of any trained model:
+`tools/diagnose_memory_margin.py` (commands in the plan, Section 10).
+
 Options of `train.py`:
 
 | Option | Values | Default | Meaning |

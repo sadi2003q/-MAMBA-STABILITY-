@@ -1,0 +1,33 @@
+# Chain-Mamba: full Mamba block stack modified for chained prediction (src/models/mamba_chain.py).
+# 3,310 parameters, against 3,282 for the full Mamba (mamba_full.yaml), 3,152 for the Long Short-Term
+# Memory network and 3,418 for Cevaal et al.'s Van der Pol model.
+#
+# Each layer: RMS normalisation -> input projection (two branches) -> depthwise causal convolution (kernel 4)
+# -> SiLU -> selective state-space core with a decay MARGIN -> multiply by SiLU of the gate branch -> output
+# projection -> residual -> RMS normalisation -> gated feed-forward (SwiGLU) -> residual.
+# Read-out: increment = (head(y_t) + W_skip [x_t, u_t, mask_t]) * increment scale  (no final normalisation).
+#
+# Certificate with margin: every decay factor is at most exp(-delta_floor * a_min) = exp(-0.05) = 0.951
+# for every input and every set of weights, so the memory's steady-state gain is at most 1 / (1 - 0.951) = 20.5
+# (the trained full Mamba in exp01d reached 250 to 1,200).
+
+model:
+  name: chain_mamba
+  d_model: 12
+  d_state: 8
+  d_conv: 4
+  n_layers: 2
+  expand: 1
+  dt_rank: 1
+  dt_min: 0.06          # total step size delta_floor + softplus(.) starts log-uniform in [0.06, 0.5]
+  dt_max: 0.5
+  delta_floor: 0.05     # step size can never go below this
+  a_min: 1.0            # decay rate magnitude can never go below this
+  ffn_hidden: 20        # SwiGLU width; 0 removes the feed-forward layer
+  bias: true
+  final_norm: false
+  use_parallel_scan: true
+
+readout:
+  linear_skip: true               # memory-free linear path from [x_t, u_t] to the increment (the anchor)
+  increment_normalisation: true   # output scaled by the standard deviation of true increments

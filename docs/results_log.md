@@ -55,3 +55,10 @@ Dated. Each experiment: verdict in 2–3 lines and whether the mathematical pred
 - **C3:** on a single step the full Mamba keeps time at zero input (clock 1.04; chained training), so the 24% slow free-running loop builds up through feedback over many steps, not from each step. Training input is near zero on 13.1% of steps but never for more than 4 steps in a row (the free-running test needs 50+).
 - **Guarantee on vs removed: about the same** on all three checks.
 - **Stage 2 closed (seed 0).** Stage 3 target: make Mamba's successive mistakes cancel (a memory update that depends on the memory; Chung, Choi and Kim, 2026), compared against the Long Short-Term Memory network and the post-hoc timing realignment baseline. Eight seeds: after all single-seed experiments are done.
+
+## 3 November 2026 — exp03 Chain-Mamba, seed 0 (direction only; processor run)
+
+- **Worth confirming.** Chain-Mamba + recipe: 50-step chained error **0.066** against the full Mamba's 0.465 (−86%), one-step 0.0135 against 0.0939, no blow-up, certificate holds, limit cycle amplitude 0.5% / period 2.4% off (full Mamba: 38% / 24%). Also 32% below the Long Short-Term Memory network trained with the same recipe (0.098; that network itself improved from 0.267, so the recipe matters for both).
+- Architecture alone (old recipe): 0.333 (−28%). Margin removed (recipe kept): **0.054**, 19% better than with the margin although its memory is slow again (largest decay 0.9986). **The mathematical prediction (a05: margin lowers chained error) did not hold**: once trained on chained predictions, the slow memory does no measurable harm. Consistent with Stage 1 (the plain certificate is non-binding).
+- Recipe alone on the unchanged full Mamba: 0.176 (−62% vs 0.465), memory still slow (largest decay 0.996–0.999), limit cycle 13.8% / 10.1% off. Chain-Mamba is 62% below it at the same size, so both the recipe and the architecture matter.
+- Seed 1 (recipe arms): Chain-Mamba 0.057, no margin 0.056, Long Short-Term Memory network 0.120. The direction holds on a second seed; margin vs no margin is about the same there.

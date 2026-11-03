@@ -5,10 +5,11 @@ from __future__ import annotations
 from src.models.dynamics import DynamicsModel
 from src.models.lstm_dynamics import LSTMCore
 from src.models.mamba_block import MambaCore
+from src.models.mamba_chain import ChainMambaCore
 from src.models.ssm_minimal import MinimalSelectiveSSM
 
 # Published reference sizes for the Van der Pol example (Cevaal, de Jong and Lazar, 2026, Table 2).
-REFERENCE_PARAMETERS = {"mamba_full": 3418, "lstm": 3052, "ssm_minimal": None}
+REFERENCE_PARAMETERS = {"mamba_full": 3418, "lstm": 3052, "ssm_minimal": None, "chain_mamba": 3418}
 
 
 def build_core(model_cfg: dict, in_dim: int):
@@ -20,12 +21,17 @@ def build_core(model_cfg: dict, in_dim: int):
         return MambaCore(in_dim, **m)
     if name == "lstm":
         return LSTMCore(in_dim, **m)
-    raise ValueError(f"Unknown model '{name}'. Known: ssm_minimal, mamba_full, lstm.")
+    if name == "chain_mamba":
+        return ChainMambaCore(in_dim, **m)
+    raise ValueError(f"Unknown model '{name}'. Known: ssm_minimal, mamba_full, lstm, chain_mamba.")
 
 
 def build_model(cfg: dict, n_x: int = 2, n_u: int = 1) -> DynamicsModel:
     core = build_core(cfg["model"], DynamicsModel.in_dim(n_x, n_u))
-    return DynamicsModel(core, n_x, n_u, clamp=cfg.get("training", {}).get("clamp_state", 50.0))
+    readout = cfg.get("readout", {}) or {}
+    return DynamicsModel(core, n_x, n_u, clamp=cfg.get("training", {}).get("clamp_state", 50.0),
+                         linear_skip=readout.get("linear_skip", False),
+                         increment_normalisation=readout.get("increment_normalisation", False))
 
 
 def count_parameters(model) -> int:

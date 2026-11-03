@@ -52,3 +52,15 @@ Dated record of what was decided and why. Newest last.
 - **Why.** Stage 2's Stage 3 rule gave "neither pattern is clean". The numbers in details.json pointed elsewhere: the full Mamba's one-step mistakes do not cancel when added up (factor 6.8) while the Long Short-Term Memory network's do (3.3). That inference assumed equal-sized mistakes along the horizon, so it is checked directly.
 - **C1** step-to-step correlation of one-step mistakes (prediction: full Mamba at least 0.10 higher than the Long Short-Term Memory network, chained training). **C2** accumulation factor of the timing and shape parts separately (prediction: timing larger for the full Mamba). **C3** one-step clock on the true zero-input loop, plus how often the training input is near zero (no prediction; rule: ≤ 0.90 slow on every step, ≥ 0.97 slowness created by feedback).
 - Config `configs/analysis/stage2b_followup.yaml`, tool `tools/diagnose_followup.py`, calculations added to `src/evaluation/error_diagnosis.py`.
+
+## 3 November 2026 — exp03 Chain-Mamba: design and recipe (fixed before any exp03 result)
+
+- **Why.** Requested: a modified Mamba that works for chained prediction on Van der Pol. Diagnosis in `docs/chain_mamba_plan.md` (Section 3): too little training (1,250 updates, full 50-step chained loss from update 1), no state-times-input product inside a step, no direct path from the current state to the increment, final normalisation removing the size of the features, and (hypothesis) memory with no decay margin (largest decay factor 0.996–0.999 in every trained layer).
+- **Model** `chain_mamba` (3,310 parameters): 2 layers, width 12, state 8, kernel 4, SwiGLU feed-forward (width 20) after each mixer, no final normalisation; decay margin Δ ≥ 0.05, A ≤ −1 (every decay factor ≤ 0.951). Read-out options (new, default off): `linear_skip` (anchor) and `increment_normalisation`.
+- **Recipe** (new training options, default off): 80 epochs, batch 128, peak learning rate 0.002 with 3 warm-up epochs and cosine decay to 1%, chained horizon growing 5 → 50 over 25 epochs, plus 0.5 × one-step teacher-forced loss, no state noise. Validation loss and model selection unchanged (full 50-step chained loss).
+- **Arms** (seed 0): proposed `chain_mamba_recipe`; controls `chain_mamba_old_recipe` (architecture alone), `full_mamba_recipe` (recipe alone), `chain_mamba_no_margin` (margin removed only); reference `lstm_recipe`. Baselines not retrained (exp01d is deterministic and reproduced on the processor to four digits).
+- **Run on a processor in the cloud at the requester's explicit request** ("make sure this will work"), using the repository's own pipeline with separate output folders per process. CLAUDE.md rule 1 set aside for this request only.
+
+## 3 November 2026 — exp03 seed 0 outcome and what is decided
+
+- Proposed arm passes its rule (0.066 vs 0.465). The control without the margin was better (0.054). **Not** switching the default after seeing this: both variants go to eight seeds (Step A in `docs/chain_mamba_plan.md`), rule written there before running. `configs/models/chain_mamba_no_margin.yaml` added so the variant can be used directly.

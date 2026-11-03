@@ -1,0 +1,12 @@
+# Chain-Mamba without the memory margin: the standard Mamba step-size range (0.001 to 0.1) and decay
+# A = -exp(A_log) (plain certificate, decay factors in (0, 1) with no guaranteed distance from 1).
+# Everything else as chain_mamba.yaml: anchor, increment normalisation, SwiGLU, kernel 4, no final norm.
+# 3,310 parameters. In exp03 (seed 0) this variant had the lowest 50-step chained error (0.054).
+
+inherit: [chain_mamba.yaml]
+
+model:
+  delta_floor: 0.0
+  a_min: 0.0
+  dt_min: 0.001
+  dt_max: 0.1

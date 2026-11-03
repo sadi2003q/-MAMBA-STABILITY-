@@ -1,0 +1,108 @@
+name: exp03_chain_mamba
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Does a Mamba built for chained prediction (memory margin + state anchor + per-step products), trained with a rollout curriculum, beat the full Mamba and the Long Short-Term Memory network on 50-step chained prediction?"
+hypothesis: >
+  Chain-Mamba with the rollout recipe lowers the 50-step chained-prediction error by at least 20% against the
+  full Mamba (exp01d, chained training: 0.465), with one-step error no more than 10% worse, no blow-up, and the
+  latent certificate holding with its margin.
+
+# --------------------------------------------------------------------------------------------
+# Plan and reasoning: docs/chain_mamba_plan.md. Seed 0 first (direction only).
+# Baselines are NOT retrained here: exp01d seed 0 is deterministic on the same data (reproduced to six digits),
+# so its numbers are the baseline: full Mamba 0.465 (chained) / 0.383 (teacher forcing); Long Short-Term
+# Memory network 0.267 (chained) / 0.193 (teacher forcing).
+# --------------------------------------------------------------------------------------------
+math_signal:
+  signal: POSITIVE for the memory margin and the anchor; INCONCLUSIVE for the size of the gain
+  what_was_checked: >
+    (1) Decay factors of the trained exp01d full Mamba (seed 0) on 256 test windows: largest factor
+    0.996-0.999 in every layer, median 0.90-0.98; step size Delta median 0.006-0.023 (it never left its initial
+    range 0.001-0.1). (2) Linearised chained-error recursion with memory: e_x(t+1) = J_xx e_x + J_xh e_h + eps,
+    e_h(t+1) = A_bar e_h + J_hx e_x. With |A_bar| <= rho the memory path adds at most
+    |J_xh| |J_hx| / (1 - rho) to the per-step error gain. Teacher forcing never sees J_hx (true states are
+    fed), so nothing in training keeps this term small, and 1 / (1 - rho) = 250-1,200 for the trained model.
+    Chain-Mamba bounds it architecturally: rho <= exp(-delta_floor * a_min) = 0.951, so 1 / (1 - rho) <= 20.5,
+    a 12-58 times smaller worst-case leak, for every input and every set of weights.
+    (3) The bound is on the memory only. The physical map is left free (the true Van der Pol step stretches
+    some direction on 100% of the cycle, a02), so the limit cycle stays representable.
+    (4) Van der Pol's one-step map is linear in [x, u] except dt * mu * x1^2 * x2: the anchor W_skip can hold
+    the linear part exactly, and the SwiGLU layer supplies the products the plain Mamba block lacks.
+  prediction: >
+    chain_mamba_recipe: 50-step error at least 20% below 0.465 and below the Long Short-Term Memory
+    network's 0.267; one-step error below 0.0339 (the teacher-forced full Mamba); largest trained decay factor
+    at most 0.951; limit cycle reproduced. The architecture alone (old recipe) helps less than both together.
+  assumptions: >
+    Linearisation near the true trajectory; the coupling gains J_xh and J_hx are of similar size in both
+    models (not measured); the CPU run uses the same data, windows and evaluation code as exp01d.
+
+# role: proposed | control (architecture or recipe alone) | reference
+arms:
+  - name: chain_mamba_recipe
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: proposed
+    overrides: &recipe
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: Chain-Mamba + rollout recipe (curriculum on the horizon, one-step loss kept, longer cosine schedule)
+
+  - name: chain_mamba_old_recipe
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    why: architecture alone, trained exactly like exp01d (40 epochs, batch 256, learning rate 0.001, decay 0.97)
+
+  - name: full_mamba_recipe
+    model: ../models/mamba_full_final.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides: *recipe
+    why: recipe alone on the unchanged full Mamba (about 2.3 times slower per step than Chain-Mamba)
+
+  - name: chain_mamba_no_margin
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: {delta_floor: 0.0, a_min: 0.0, dt_min: 0.001, dt_max: 0.1}
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: removes only the memory margin (standard Mamba step-size range and decay), everything else as proposed
+
+  - name: lstm_recipe
+    model: ../models/lstm_final.yaml
+    training_regime: chained
+    group: chained
+    role: reference
+    overrides: *recipe
+    why: fair reference, the Long Short-Term Memory network with the same recipe
+
+decision_rule:
+  type: proposed
+  metric: rollout_rmse          # root-mean-square error averaged over the 50 chained-prediction steps
+  baseline_value: 0.465         # exp01d certified_chained, seed 0
+  improvement_percent: 20
+  one_step_worse_percent: 10
