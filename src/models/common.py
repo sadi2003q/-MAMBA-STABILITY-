@@ -16,12 +16,17 @@ class DecayParam(nn.Module):
     """Continuous-time decay A, shape [channels, d_state].
 
     certified:      A = -exp(A_log)  < 0 always  -> A_bar = exp(Delta * A) in (0, 1): the latent certificate
-    free_sign:      A = A_raw, starts at the same negative values, may become positive during training
+    free_sign:      A = -A_raw, starts at the same negative values, may become positive during training
     unstable_init:  A = A_raw, starts at the mirrored positive values (memory grows at the start)
     Initial magnitudes 1, 2, ..., d_state per channel (the usual Mamba / S4D-real start).
     """
 
-    def __init__(self, channels: int, d_state: int, mode: str = "certified", unstable_init_scale: float = 1.0):
+    def __init__(self, 
+                 channels: int, 
+                 d_state: int, 
+                 mode: str = "certified", 
+                 unstable_init_scale: float = 1.0
+                ):
         super().__init__()
         if mode not in DECAY_MODES:
             raise ValueError(f"decay_mode must be one of {DECAY_MODES}, got '{mode}'.")
@@ -56,6 +61,12 @@ def init_dt_bias(linear: nn.Linear, dt_min: float, dt_max: float) -> None:
 
 def parallel_scan(a: torch.Tensor, b: torch.Tensor, h0: torch.Tensor | None = None) -> torch.Tensor:
     """All states of h_t = a_t * h_{t-1} + b_t along dim 1 (time), by recursive doubling.
+    
+    b_t = B · x_t
+    B_t = W_B · s_t
+        x_t is the input at time step t, taken straight from your data.
+        B is a learned weight. It is the same at every time step.
+        b_t is the result for that one step.
 
     a, b: [batch, T, ...]; h0: [batch, ...] or None (zero). Returns h: [batch, T, ...].
     Exact (no division by cumulative products), so it is safe for decay factors near 0.
