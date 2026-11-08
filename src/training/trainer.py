@@ -113,6 +113,7 @@ def make_optimizer(model, cfg: dict):
             epoch_after_warmup = epoch - warmup_epochs
             cosine_length = max(1, total_epochs-warmup_epochs)
             progress = epoch_after_warmup/cosine_length
+            progress = min(1.0, progress)
 
             # Part C: half a cosine wave: cos goes from +1 (start) down to -1 (end)
             cosine_value = math.cos(math.pi * progress)
@@ -154,7 +155,7 @@ def rollout_options(training_cfg:dict, epoch:int, horizon:int) -> dict:
     options = {}
         
     # Step 1: noise and the extra one-step loss (0.0 if the config does not mention them)
-    options["nois_std"] = float(training_cfg.get("state_noise_std", 0.0))
+    options["noise_std"] = float(training_cfg.get("state_noise_std", 0.0))
     options["teacher_weight"] = float(training_cfg.get("teacher_aux_weight", 0.0))
 
     # Step 2: the chain-length curriculum, only if the config asks for it
