@@ -94,90 +94,14 @@ def make_optimizer(model, cfg: dict):
         lr=training_cfg["lr"],
     )
 
-    # Step 4: choose how the learning rate changes from epoch to epoch
-    # (old training has no "lr_schedule" setting -> "exponential")
-    schedule_name = training_cfg.get("lr_schedule", "exponential")
-
-    if schedule_name == "cosine":
-        # RECIPE: a few warm-up epochs, then a smooth cosine curve down to a small final value
-        total_epochs = int(training_cfg["epochs"])                          # 80
-        warmup_epochs = int(training_cfg.get("warmup_epochs", 0))           # 3
-        final_fraction = float(training_cfg.get("lr_final_fraction", 0.01)) # end at 1% of the peak
-
-        def learning_rate_factor(epoch):
-            # The learning rate used in this epoch = lr x (the number this function returns)
-
-            # Part A: warm-up epochs -> the factor grows 0.25, 0.50, 0.75 (for 3 warm-up epochs)
-            if epoch < warmup_epochs:
-                factor = (epoch + 1) / (warmup_epochs + 1)
-                return factor
-
-            # Part B: after warm-up -> how far through the cosine part are we?
-            epochs_after_warmup = epoch - warmup_epochs
-            cosine_length = max(1, total_epochs - warmup_epochs)
-            progress = epochs_after_warmup / cosine_length       # 0.0 at the start, close to 1.0 at the end
-            progress = min(1.0, progress)
-
-            # Part C: half a cosine wave: cos goes from +1 (start) down to -1 (end)
-            cosine_value = math.cos(math.pi * progress)
-            one_plus_cosine = 1.0 + cosine_value                 # goes from 2 down to 0
-
-            # Part D: squeeze it so the factor goes from 1.0 down to final_fraction
-            # (same order of multiplications as the original code -> identical numbers)
-            scale = (1.0 - final_fraction) * 0.5
-            factor = final_fraction + scale * one_plus_cosine
-            return factor
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, learning_rate_factor)
-
-    else:
-        # OLD TRAINING: the learning rate is multiplied by gamma (0.97) after every epoch
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            optimizer,
-            gamma=training_cfg["lr_decay_gamma"],
-        )
+    # Step 4: how the learning rate changes from epoch to epoch
+    # OLD TRAINING: the learning rate is multiplied by gamma (0.97) after every epoch
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(
+        optimizer,
+        gamma=training_cfg["lr_decay_gamma"],
+    )
 
     return optimizer, scheduler
-
-
-# ----------------------------------------------------------------------------------------------
-# RECIPE: chained-training options for one epoch
-# ----------------------------------------------------------------------------------------------
-def rollout_options(training_cfg: dict, epoch: int, horizon: int) -> dict:
-    """
-    The extra settings that chained training uses in this epoch.
-    All of them are switched off unless the config turns them on.
-
-        rollout_curriculum: {start: 5, epochs: 25}
-            chain `start` steps in the first epoch, growing evenly to the full
-            horizon by epoch `epochs` (short chains first, like easy lessons first)
-        state_noise_std: 0.0
-            noise added to the states that are fed back (0 = off)
-        teacher_aux_weight: 0.0
-            weight of the extra one-step teacher-forcing loss (recipe: 0.5)
-    """
-    options = {}
-
-    # Step 1: noise and the extra one-step loss (0.0 if the config does not mention them)
-    options["noise_std"] = float(training_cfg.get("state_noise_std", 0.0))
-    options["teacher_weight"] = float(training_cfg.get("teacher_aux_weight", 0.0))
-
-    # Step 2: the chain-length curriculum, only if the config asks for it
-    curriculum = training_cfg.get("rollout_curriculum")
-
-    if curriculum:
-        start_length = int(curriculum.get("start", 1))            # e.g. 5 steps
-        growth_epochs = max(1, int(curriculum.get("epochs", 1)))  # e.g. reach the full horizon by epoch 25
-
-        # fraction of the growth done so far: 0.0 at epoch 0, 1.0 from epoch 25 on
-        fraction_done = epoch / growth_epochs
-        fraction_done = min(1.0, fraction_done)
-
-        # chain length grows evenly from start_length to the full horizon
-        length = start_length + (horizon - start_length) * fraction_done
-        options["train_horizon"] = int(round(length))
-
-    return options
 
 
 # ----------------------------------------------------------------------------------------------
@@ -420,13 +344,6 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
         steps = 0            # all batches tried in this epoch
         nonfinite = 0        # batches skipped because of NaN / infinity
 
-        # RECIPE: this epoch's chained-training options (chain length, extra one-step loss).
-        # Old training and the other regimes get an empty dictionary -> nothing changes.
-        if regime == "chained":
-            options = rollout_options(training_cfg, epoch, horizon)
-        else:
-            options = {}
-
         # ---- 5a: go through the training data one mini-batch at a time ----
         for batch_indices in _batches(number_of_windows, batch_size, shuffle_generator):
             x = train_split.xw[batch_indices].to(device)
@@ -434,9 +351,7 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
 
             # Forward pass: compute the loss
             optimizer.zero_grad(set_to_none=True)
-            # "**options" unpacks the dictionary into named settings, e.g.
-            # train_horizon=5, noise_std=0.0, teacher_weight=0.5
-            loss, _ = regime_loss(model, x, u, regime, context_len, horizon, **options)
+            loss, _ = regime_loss(model, x, u, regime, context_len, horizon)
             steps = steps + 1
 
             # Bad loss? Skip this batch.
@@ -498,9 +413,7 @@ def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bo
         train_seconds = train_seconds + epoch_seconds
 
         # How many steps were chained in this epoch (written to train_log.csv)
-        if "train_horizon" in options:
-            chain_length_this_epoch = options["train_horizon"]     # recipe: grows 5 -> 50
-        elif regime == "chained":
+        if regime == "chained":
             chain_length_this_epoch = horizon                      # old training: always 50
         else:
             chain_length_this_epoch = ""                           # not chained training

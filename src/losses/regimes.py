@@ -88,82 +88,49 @@ def direct_loss(model: DynamicsModel, x, u, context_len: int, horizon: int):
 
 
 def chained_loss(model: DynamicsModel, x, u, context_len: int, horizon: int,
-                 train_horizon=None, noise_std: float = 0.0, teacher_weight: float = 0.0):
+                 noise_std: float = 0.0):
     """
     Chained prediction: the model is fed its OWN predictions, one step after another.
-
-    Three optional settings (all switched off by default, so the old training is unchanged):
-        train_horizon   RECIPE: chain only this many steps (the curriculum grows it 5 -> 50)
-        noise_std       add a little random noise to the states that are fed back (0 = off)
-        teacher_weight  RECIPE: also add teacher_weight x (one-step teacher-forcing loss)
+    RAW version: always chain the full horizon, and use only the chained loss.
     """
 
-    # Step 1: how many steps to chain in this batch
-    # Old training: always the full horizon (50).
-    # Recipe: the curriculum may ask for fewer steps early in training.
-    if train_horizon is None:
-        steps_to_chain = horizon
-    else:
-        steps_to_chain = int(train_horizon)
-        steps_to_chain = min(steps_to_chain, horizon)    # never more than the full horizon
-        steps_to_chain = max(1, steps_to_chain)          # always at least one step
+    # Step 1: how many steps to chain: always the full horizon (50)
+    steps_to_chain = horizon
 
     # Step 2: the true starting states (context), and the true future to compare against
-    # context = states 0 .. context_len           (the model sees these)
-    # future  = the next steps_to_chain states    (the model must predict these)
     true_context = x[:, :context_len + 1]
     future_start = context_len + 1
     future_end = context_len + 1 + steps_to_chain
     true_future = x[:, future_start:future_end]
 
     # Step 3: let the model chain its own predictions
-    # hit_clamp marks rows where values exploded and had to be clamped
     predictions, hit_clamp = model.chained(true_context, u, steps_to_chain, noise_std=noise_std)
 
     # Step 4: the chained loss
     loss = mean_squared_error(predictions, true_future)
 
-    # Step 5 (RECIPE): add the one-step loss, so each single step also stays accurate
-    if teacher_weight > 0:
-        one_step_loss, _ = teacher_forcing_loss(model, x, u)
-        loss = loss + teacher_weight * one_step_loss
-
-    # Step 6: count how many rows hit the clamp
+    # Step 5: count how many rows hit the clamp
     number_of_bad_rows = int(hit_clamp.sum())
 
     return loss, number_of_bad_rows
 
 
 def regime_loss(model: DynamicsModel, x, u, regime: str, context_len: int, horizon: int,
-                train_horizon=None, noise_std: float = 0.0, teacher_weight: float = 0.0):
-    """
-    Main entry point used by the trainer.
-
-    Shapes:
-        x : [batch, context_len + horizon + 1, number_of_state_variables]
-        u : [batch, context_len + horizon,     number_of_control_inputs]
-
-    The last three settings are used by chained training only (see chained_loss).
-
-    Returns:
-        (loss, number of rows that hit the clamp)
-    """
+                noise_std: float = 0.0):
+    """Main entry point used by the trainer. Returns (loss, number of rows that hit the clamp)."""
 
     if regime == "teacher_forcing":
         loss, number_of_bad_rows = teacher_forcing_loss(model, x, u)
     elif regime == "direct":
         loss, number_of_bad_rows = direct_loss(model, x, u, context_len, horizon)
     else:
-        # every other regime name means chained prediction
         loss, number_of_bad_rows = chained_loss(
             model,
             x,
             u,
             context_len,
             horizon,
-            train_horizon=train_horizon,
             noise_std=noise_std,
-            teacher_weight=teacher_weight,
         )
 
     return loss, number_of_bad_rows
