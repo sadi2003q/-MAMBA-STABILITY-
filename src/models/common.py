@@ -21,7 +21,12 @@ class DecayParam(nn.Module):
     Initial magnitudes 1, 2, ..., d_state per channel (the usual Mamba / S4D-real start).
     """
 
-    def __init__(self, channels: int, d_state: int, mode: str = "certified", unstable_init_scale: float = 1.0):
+    def __init__(self, 
+                 channels: int, 
+                 d_state: int, 
+                 mode: str = "certified", 
+                 unstable_init_scale: float = 1.0
+                ):
         super().__init__()
         if mode not in DECAY_MODES:
             raise ValueError(f"decay_mode must be one of {DECAY_MODES}, got '{mode}'.")
@@ -56,6 +61,12 @@ def init_dt_bias(linear: nn.Linear, dt_min: float, dt_max: float) -> None:
 
 def parallel_scan(a: torch.Tensor, b: torch.Tensor, h0: torch.Tensor | None = None) -> torch.Tensor:
     """All states of h_t = a_t * h_{t-1} + b_t along dim 1 (time), by recursive doubling.
+    
+    In the Mamba layer (mamba_block.py), for each time step t:
+        a_t = exp(Delta_t * A)          how much of the old memory is kept (between 0 and 1)
+        b_t = (Delta_t * s_t) * B_t     the new information written into the memory
+    where s_t is the layer's input at step t (after the convolution, not the raw data),
+    and Delta_t and B_t are computed FROM s_t at every step (so they change with t).
 
     a, b: [batch, T, ...]; h0: [batch, ...] or None (zero). Returns h: [batch, T, ...].
     Exact (no division by cumulative products), so it is safe for decay factors near 0.

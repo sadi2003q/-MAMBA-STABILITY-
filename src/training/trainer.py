@@ -1,5 +1,19 @@
-"""Training loop for one (arm, seed) run: tqdm progress, mid-run checkpoints, resume, divergence handling,
-then the full evaluation. Everything for the run goes into its own folder."""
+"""
+Training loop for one (arm, seed) run.
+
+What this file does, in order:
+    1. Builds the model and the optimizer.
+    2. Trains the model epoch by epoch, with a tqdm progress bar.
+    3. Saves a checkpoint every few epochs, so an interrupted run can continue.
+    4. Stops early if training "blows up" (too many non-finite losses or gradients).
+    5. Keeps the model weights that gave the best validation loss.
+    6. Runs the full evaluation on the test set.
+
+Everything for one run is written into its own folder (run_dir).
+
+Beginner note: "non-finite" means the number is NaN (not a number) or infinity.
+That happens when training becomes unstable.
+"""
 
 from __future__ import annotations
 
@@ -20,260 +34,676 @@ from src.utils.io import save_json, write_train_log
 from src.utils.seed import set_seed
 
 
+# ----------------------------------------------------------------------------------------------
+# Small helper: remove private settings (keys starting with "_") before saving a config
+# ----------------------------------------------------------------------------------------------
+def _public_config(cfg: dict) -> dict:
+    clean_cfg = {}
+    for key, value in cfg.items():
+        if key.startswith("_"):
+            continue          # skip private / internal keys
+        clean_cfg[key] = value
+    return clean_cfg
+
+
+# ----------------------------------------------------------------------------------------------
+# Optimizer and learning-rate schedule
+# ----------------------------------------------------------------------------------------------
 def make_optimizer(model, cfg: dict):
-    decay, no_decay = [], []
-    for p in model.parameters():
-        if not p.requires_grad:
-            continue
-        (no_decay if getattr(p, "_no_weight_decay", False) or p.ndim < 2 else decay).append(p)
-    t = cfg["training"]
-    opt = torch.optim.Adam([{"params": decay, "weight_decay": t["weight_decay"]},
-                            {"params": no_decay, "weight_decay": 0.0}], lr=t["lr"])
-    if t.get("lr_schedule", "exponential") == "cosine":
-        # linear warm-up for `warmup_epochs`, then cosine decay to lr * lr_final_fraction (stepped per epoch)
-        epochs, warm = int(t["epochs"]), int(t.get("warmup_epochs", 0))
-        final = float(t.get("lr_final_fraction", 0.01))
-
-        def factor(epoch: int) -> float:
-            if epoch < warm:
-                return (epoch + 1) / (warm + 1)
-            progress = (epoch - warm) / max(1, epochs - warm)
-            return final + (1.0 - final) * 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
-        sched = torch.optim.lr_scheduler.LambdaLR(opt, factor)
-    else:
-        sched = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=t["lr_decay_gamma"])
-    return opt, sched
-
-
-def rollout_options(t_cfg: dict, epoch: int, horizon: int) -> dict:
-    """Chained-training options for this epoch (all off unless set in the training config).
-
-    rollout_curriculum: {start: 5, epochs: 20}  roll out `start` steps in the first epoch, growing linearly to
-                                                the full horizon by epoch `epochs` (scheduled lengthening of the
-                                                truncated simulation loss)
-    state_noise_std: 0.0                        noise on fed-back states, normalised units
-    teacher_aux_weight: 0.0                     weight of an added one-step teacher-forced loss
     """
-    opts = {"noise_std": float(t_cfg.get("state_noise_std", 0.0)),
-            "teacher_weight": float(t_cfg.get("teacher_aux_weight", 0.0))}
-    cur = t_cfg.get("rollout_curriculum")
-    if cur:
-        start, n = int(cur.get("start", 1)), max(1, int(cur.get("epochs", 1)))
-        opts["train_horizon"] = int(round(start + (horizon - start) * min(1.0, epoch / n)))
-    return opts
+    Build the Adam optimizer and the learning-rate scheduler.
+
+    Weight decay (a small pull of the weights towards zero) is applied only to
+    weight matrices. It is NOT applied to:
+        - parameters with ndim < 2 (biases, single vectors, scalars), and
+        - parameters marked with the attribute _no_weight_decay = True
+          (for example the decay parameter A of the state-space model).
+    """
+    training_cfg = cfg["training"]
+
+    # Step 1: sort every trainable parameter into one of two lists
+    params_with_decay = []
+    params_without_decay = []
+
+    for param in model.parameters():
+        # Skip frozen parameters
+        if not param.requires_grad:
+            continue
+
+        marked_no_decay = getattr(param, "_no_weight_decay", False)
+        is_vector_or_scalar = param.ndim < 2
+
+        if marked_no_decay or is_vector_or_scalar:
+            params_without_decay.append(param)
+        else:
+            params_with_decay.append(param)
+
+    # Step 2: one parameter group per list
+    group_with_decay = {
+        "params": params_with_decay,
+        "weight_decay": training_cfg["weight_decay"],
+    }
+    group_without_decay = {
+        "params": params_without_decay,
+        "weight_decay": 0.0,
+    }
+
+    # Step 3: the Adam optimizer
+    optimizer = torch.optim.Adam(
+        [group_with_decay, group_without_decay],
+        lr=training_cfg["lr"],
+    )
+
+    # Step 4: choose how the learning rate changes from epoch to epoch
+    # (old training has no "lr_schedule" setting -> "exponential")
+    schedule_name = training_cfg.get("lr_schedule", "exponential")
+
+    if schedule_name == "cosine":
+        # RECIPE: a few warm-up epochs, then a smooth cosine curve down to a small final value
+        total_epochs = int(training_cfg["epochs"])                          # 80
+        warmup_epochs = int(training_cfg.get("warmup_epochs", 0))           # 3
+        final_fraction = float(training_cfg.get("lr_final_fraction", 0.01)) # end at 1% of the peak
+
+        def learning_rate_factor(epoch):
+            # The learning rate used in this epoch = lr x (the number this function returns)
+
+            # Part A: warm-up epochs -> the factor grows 0.25, 0.50, 0.75 (for 3 warm-up epochs)
+            if epoch < warmup_epochs:
+                factor = (epoch + 1) / (warmup_epochs + 1)
+                return factor
+
+            # Part B: after warm-up -> how far through the cosine part are we?
+            epochs_after_warmup = epoch - warmup_epochs
+            cosine_length = max(1, total_epochs - warmup_epochs)
+            progress = epochs_after_warmup / cosine_length       # 0.0 at the start, close to 1.0 at the end
+            progress = min(1.0, progress)
+
+            # Part C: half a cosine wave: cos goes from +1 (start) down to -1 (end)
+            cosine_value = math.cos(math.pi * progress)
+            one_plus_cosine = 1.0 + cosine_value                 # goes from 2 down to 0
+
+            # Part D: squeeze it so the factor goes from 1.0 down to final_fraction
+            # (same order of multiplications as the original code -> identical numbers)
+            scale = (1.0 - final_fraction) * 0.5
+            factor = final_fraction + scale * one_plus_cosine
+            return factor
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, learning_rate_factor)
+
+    else:
+        # OLD TRAINING: the learning rate is multiplied by gamma (0.97) after every epoch
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            optimizer,
+            gamma=training_cfg["lr_decay_gamma"],
+        )
+
+    return optimizer, scheduler
 
 
+# ----------------------------------------------------------------------------------------------
+# RECIPE: chained-training options for one epoch
+# ----------------------------------------------------------------------------------------------
+def rollout_options(training_cfg: dict, epoch: int, horizon: int) -> dict:
+    """
+    The extra settings that chained training uses in this epoch.
+    All of them are switched off unless the config turns them on.
+
+        rollout_curriculum: {start: 5, epochs: 25}
+            chain `start` steps in the first epoch, growing evenly to the full
+            horizon by epoch `epochs` (short chains first, like easy lessons first)
+        state_noise_std: 0.0
+            noise added to the states that are fed back (0 = off)
+        teacher_aux_weight: 0.0
+            weight of the extra one-step teacher-forcing loss (recipe: 0.5)
+    """
+    options = {}
+
+    # Step 1: noise and the extra one-step loss (0.0 if the config does not mention them)
+    options["noise_std"] = float(training_cfg.get("state_noise_std", 0.0))
+    options["teacher_weight"] = float(training_cfg.get("teacher_aux_weight", 0.0))
+
+    # Step 2: the chain-length curriculum, only if the config asks for it
+    curriculum = training_cfg.get("rollout_curriculum")
+
+    if curriculum:
+        start_length = int(curriculum.get("start", 1))            # e.g. 5 steps
+        growth_epochs = max(1, int(curriculum.get("epochs", 1)))  # e.g. reach the full horizon by epoch 25
+
+        # fraction of the growth done so far: 0.0 at epoch 0, 1.0 from epoch 25 on
+        fraction_done = epoch / growth_epochs
+        fraction_done = min(1.0, fraction_done)
+
+        # chain length grows evenly from start_length to the full horizon
+        length = start_length + (horizon - start_length) * fraction_done
+        options["train_horizon"] = int(round(length))
+
+    return options
+
+
+# ----------------------------------------------------------------------------------------------
+# Training-data statistics that some read-outs need
+# ----------------------------------------------------------------------------------------------
 def attach_data_statistics(model, data: dict) -> None:
-    """Give the model the training-data statistics some read-outs need (no-op for the others)."""
-    if getattr(model, "increment_normalisation", False) and "increment_std" in data:
+    """
+    Give the model the typical size of one true step-to-step change.
+    Only models with the anchor's increment scale ("increment_normalisation") use it;
+    for every other model this function does nothing.
+    """
+    uses_increment_scale = getattr(model, "increment_normalisation", False)
+    statistic_is_available = "increment_std" in data
+
+    if uses_increment_scale and statistic_is_available:
         model.set_increment_scale(data["increment_std"])
 
 
+# ----------------------------------------------------------------------------------------------
+# Mini-batches
+# ----------------------------------------------------------------------------------------------
 def _batches(n: int, batch_size: int, generator: torch.Generator):
-    order = torch.randperm(n, generator=generator)
-    for i in range(0, n, batch_size):
-        yield order[i:i + batch_size]
+    """
+    Shuffle the numbers 0 .. n-1 and hand them out in chunks of batch_size.
+    Each chunk is a list of window indices that make one mini-batch.
+
+    The shuffle uses our own random generator, so the order is reproducible
+    for a given seed (and is saved in the checkpoint for resuming).
+    """
+    # Step 1: a random order of all window indices
+    shuffled_order = torch.randperm(n, generator=generator)
+
+    # Step 2: hand out one chunk at a time
+    for start in range(0, n, batch_size):
+        end = start + batch_size
+        batch_indices = shuffled_order[start:end]
+        yield batch_indices
 
 
+# ----------------------------------------------------------------------------------------------
+# Validation loss
+# ----------------------------------------------------------------------------------------------
 @torch.no_grad()
 def validation_loss(model, data: dict, regime: str, device, batch_size: int = 512) -> float:
+    """
+    Average training-style loss on the validation split.
+    Returns infinity if any batch gives a non-finite loss.
+    """
     model.eval()
-    split = data["splits"]["val"]
-    total, n = 0.0, 0
-    for i in range(0, split.xw.shape[0], batch_size):
-        x = split.xw[i:i + batch_size].to(device)
-        u = split.uw[i:i + batch_size].to(device)
-        loss, _ = regime_loss(model, x, u, regime, data["context_len"], data["horizon"])
-        if not math.isfinite(float(loss)):
+
+    val_split = data["splits"]["val"]
+    context_len = data["context_len"]
+    horizon = data["horizon"]
+    number_of_windows = val_split.xw.shape[0]
+
+    total_loss = 0.0
+    total_windows = 0
+
+    for start in range(0, number_of_windows, batch_size):
+        end = start + batch_size
+
+        # Step 1: take one batch of windows and move it to the device
+        x = val_split.xw[start:end].to(device)     # physical states
+        u = val_split.uw[start:end].to(device)     # control inputs
+
+        # Step 2: compute the loss for this batch
+        loss, _ = regime_loss(model, x, u, regime, context_len, horizon)
+        loss_value = float(loss)
+
+        # Step 3: if the loss blew up, the whole validation loss is infinite
+        if not math.isfinite(loss_value):
             return float("inf")
-        total += float(loss) * x.shape[0]
-        n += x.shape[0]
-    return total / n
+
+        # Step 4: add this batch, weighted by how many windows it has
+        windows_in_batch = x.shape[0]
+        total_loss = total_loss + loss_value * windows_in_batch
+        total_windows = total_windows + windows_in_batch
+
+    average_loss = total_loss / total_windows
+    return average_loss
 
 
+# ----------------------------------------------------------------------------------------------
+# Timing (used only for the run-time estimate before a long job)
+# ----------------------------------------------------------------------------------------------
 def time_batches(cfg: dict, data: dict, device, n_batches: int = 3) -> float:
-    """Seconds per training batch (after one warm-up batch). Used for the run-time estimate."""
+    """
+    Measure how many seconds one training batch takes.
+    The first batch is a warm-up and is not counted (it is always slower).
+    """
+    # Step 1: a fresh model and optimizer, just for timing
     set_seed(0)
     model = build_model(cfg).to(device)
     attach_data_statistics(model, data)
-    opt, _ = make_optimizer(model, cfg)
-    split = data["splits"]["train"]
-    bs = cfg["training"]["batch_size"]
-    times = []
-    for b in range(n_batches + 1):
-        idx = torch.arange(b * bs, (b + 1) * bs) % split.xw.shape[0]
-        x, u = split.xw[idx].to(device), split.uw[idx].to(device)
-        if device.type == "cuda":
+    optimizer, _ = make_optimizer(model, cfg)
+
+    train_split = data["splits"]["train"]
+    batch_size = cfg["training"]["batch_size"]
+    regime = cfg["training"]["regime"]
+    number_of_windows = train_split.xw.shape[0]
+    on_gpu = device.type == "cuda"
+
+    measured_times = []
+
+    # Step 2: run (warm-up + n_batches) batches
+    for batch_number in range(n_batches + 1):
+        # Pick consecutive windows; "% number_of_windows" wraps around at the end
+        indices = torch.arange(batch_number * batch_size, (batch_number + 1) * batch_size)
+        indices = indices % number_of_windows
+
+        x = train_split.xw[indices].to(device)
+        u = train_split.uw[indices].to(device)
+
+        # On a graphics card, wait for earlier work to finish before starting the clock
+        if on_gpu:
             torch.cuda.synchronize()
-        t0 = time.time()
+        start_time = time.time()
+
+        # One normal training step
         model.train()
-        opt.zero_grad(set_to_none=True)
-        loss, _ = regime_loss(model, x, u, cfg["training"]["regime"], data["context_len"], data["horizon"])
+        optimizer.zero_grad(set_to_none=True)
+        loss, _ = regime_loss(model, x, u, regime, data["context_len"], data["horizon"])
         if torch.isfinite(loss):
             loss.backward()
-            opt.step()
-        if device.type == "cuda":
+            optimizer.step()
+
+        # Wait again so we measure the real finishing time
+        if on_gpu:
             torch.cuda.synchronize()
-        if b > 0:
-            times.append(time.time() - t0)
-    return sum(times) / len(times)
+        elapsed = time.time() - start_time
+
+        # Skip the warm-up batch (batch_number 0)
+        if batch_number > 0:
+            measured_times.append(elapsed)
+
+    # Step 3: average seconds per batch
+    average_seconds = sum(measured_times) / len(measured_times)
+    return average_seconds
 
 
+# ----------------------------------------------------------------------------------------------
+# One full training run
+# ----------------------------------------------------------------------------------------------
 def train_run(cfg: dict, data: dict, seed: int, run_dir: Path, device, fresh: bool = False,
               position_label: str = "", log=None) -> dict:
-    """Train one (arm, seed) run. `log` is an optional ConsoleLog for the details file."""
-    run_dir.mkdir(parents=True, exist_ok=True)
-    save_yaml({k: v for k, v in cfg.items() if not k.startswith("_")}, run_dir / "config.yaml")
-    t_cfg = cfg["training"]
-    regime = t_cfg["regime"]
-    C, H = data["context_len"], data["horizon"]
+    """
+    Train one (arm, seed), then evaluate it. Returns the metrics dictionary.
 
+    fresh = True  -> ignore any old checkpoint and start from epoch 0.
+    fresh = False -> if checkpoint_last.pt exists, continue from it.
+    log           -> optional ConsoleLog (from train.py); details go to its log file,
+                     so the screen shows only the progress bar and the key numbers.
+    """
+    # ------------------------------------------------------------------
+    # Step 1: prepare the run folder and save the settings used
+    # ------------------------------------------------------------------
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save_yaml(_public_config(cfg), run_dir / "config.yaml")
+
+    training_cfg = cfg["training"]
+    regime = training_cfg["regime"]
+    context_len = data["context_len"]
+    horizon = data["horizon"]
+
+    # ------------------------------------------------------------------
+    # Step 2: build the model, optimizer and the batch-shuffling generator
+    # (set_seed must come first so the starting weights are reproducible)
+    # ------------------------------------------------------------------
     set_seed(seed)
     model = build_model(cfg).to(device)
     attach_data_statistics(model, data)
-    opt, sched = make_optimizer(model, cfg)
-    gen = torch.Generator().manual_seed(seed)
+    optimizer, scheduler = make_optimizer(model, cfg)
+    shuffle_generator = torch.Generator().manual_seed(seed)
 
-    ckpt_path = run_dir / "checkpoint_last.pt"
-    start_epoch, log_rows = 0, []
-    best_val, best_state = float("inf"), None
-    nonfinite_total, diverged = 0, False
-    train_seconds = 0.0
-    if ckpt_path.exists() and not fresh:
-        ck = torch.load(ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(ck["model"])
-        opt.load_state_dict(ck["optimizer"])
-        sched.load_state_dict(ck["scheduler"])
-        gen.set_state(ck["generator"])
-        start_epoch, log_rows = ck["epoch"], ck["log_rows"]
-        best_val, best_state = ck["best_val"], ck["best_state"]
-        nonfinite_total, diverged = ck["nonfinite_total"], ck["diverged"]
-        train_seconds = ck.get("train_seconds", 0.0)
+    # ------------------------------------------------------------------
+    # Step 3: starting values (used when there is no checkpoint)
+    # ------------------------------------------------------------------
+    checkpoint_path = run_dir / "checkpoint_last.pt"
+
+    start_epoch = 0
+    log_rows = []                    # one dictionary per finished epoch
+    best_val = float("inf")          # best validation loss so far
+    best_state = None                # model weights at the best validation loss
+    nonfinite_total = 0              # bad steps over the whole run
+    diverged = False                 # becomes True if training blows up
+    train_seconds = 0.0              # total training time (without evaluation)
+
+    # ------------------------------------------------------------------
+    # Step 4: resume from the last checkpoint if there is one
+    # ------------------------------------------------------------------
+    if checkpoint_path.exists() and not fresh:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        shuffle_generator.set_state(checkpoint["generator"])
+
+        start_epoch = checkpoint["epoch"]
+        log_rows = checkpoint["log_rows"]
+        best_val = checkpoint["best_val"]
+        best_state = checkpoint["best_state"]
+        nonfinite_total = checkpoint["nonfinite_total"]
+        diverged = checkpoint["diverged"]
+        train_seconds = checkpoint.get("train_seconds", 0.0)   # older checkpoints may not have it
+
         # The resume message goes to the log file only (the progress bar already shows the epoch)
         if log is not None:
             log.detail(f"resuming {position_label} from epoch {start_epoch}")
 
-    split = data["splits"]["train"]
-    n_train = split.xw.shape[0]
-    epochs = int(t_cfg["epochs"])
+    # ------------------------------------------------------------------
+    # Step 5: the epoch loop
+    # ------------------------------------------------------------------
+    train_split = data["splits"]["train"]
+    number_of_windows = train_split.xw.shape[0]
+    total_epochs = int(training_cfg["epochs"])
+    batch_size = training_cfg["batch_size"]
+    grad_clip = training_cfg["grad_clip"]
+    max_bad_fraction = training_cfg["max_nonfinite_fraction"]
+    checkpoint_every = int(training_cfg["checkpoint_every"])
 
     # One progress bar per run, e.g. "run 3/12 certified_chained seed0 | 18/40 epochs"
-    bar = progress_bar(total=epochs, description=position_label, unit="epoch", already_done=start_epoch)
-    for epoch in range(start_epoch, epochs):
+    # (named epoch_bar, so it does not hide the progress_bar function we imported)
+    epoch_bar = progress_bar(
+        total=total_epochs,
+        description=position_label,
+        unit="epoch",
+        already_done=start_epoch,
+    )
+
+    for epoch in range(start_epoch, total_epochs):
+        # A run that has already blown up is not trained any further
         if diverged:
             break
-        t0 = time.time()
+
+        epoch_start_time = time.time()
         model.train()
-        loss_sum, steps, nonfinite = 0.0, 0, 0
-        opts = rollout_options(t_cfg, epoch, H) if regime == "chained" else {}
-        for idx in _batches(n_train, t_cfg["batch_size"], gen):
-            x, u = split.xw[idx].to(device), split.uw[idx].to(device)
-            opt.zero_grad(set_to_none=True)
-            loss, _ = regime_loss(model, x, u, regime, C, H, **opts)
-            steps += 1
+
+        loss_sum = 0.0       # sum of the good (finite) losses in this epoch
+        steps = 0            # all batches tried in this epoch
+        nonfinite = 0        # batches skipped because of NaN / infinity
+
+        # RECIPE: this epoch's chained-training options (chain length, extra one-step loss).
+        # Old training and the other regimes get an empty dictionary -> nothing changes.
+        if regime == "chained":
+            options = rollout_options(training_cfg, epoch, horizon)
+        else:
+            options = {}
+
+        # ---- 5a: go through the training data one mini-batch at a time ----
+        for batch_indices in _batches(number_of_windows, batch_size, shuffle_generator):
+            x = train_split.xw[batch_indices].to(device)
+            u = train_split.uw[batch_indices].to(device)
+
+            # Forward pass: compute the loss
+            optimizer.zero_grad(set_to_none=True)
+            # "**options" unpacks the dictionary into named settings, e.g.
+            # train_horizon=5, noise_std=0.0, teacher_weight=0.5
+            loss, _ = regime_loss(model, x, u, regime, context_len, horizon, **options)
+            steps = steps + 1
+
+            # Bad loss? Skip this batch.
             if not torch.isfinite(loss):
-                nonfinite += 1
+                nonfinite = nonfinite + 1
                 continue
+
+            # Backward pass: compute the gradients
             loss.backward()
-            grads_ok = all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
+
+            # Bad gradient anywhere? Throw the gradients away and skip this batch.
+            grads_ok = True
+            for param in model.parameters():
+                if param.grad is None:
+                    continue
+                if not torch.isfinite(param.grad).all():
+                    grads_ok = False
+                    break
+
             if not grads_ok:
-                nonfinite += 1
-                opt.zero_grad(set_to_none=True)
+                nonfinite = nonfinite + 1
+                optimizer.zero_grad(set_to_none=True)
                 continue
-            torch.nn.utils.clip_grad_norm_(model.parameters(), t_cfg["grad_clip"])
-            opt.step()
-            loss_sum += float(loss)
-        sched.step()
-        nonfinite_total += nonfinite
-        if steps == 0 or nonfinite / steps > t_cfg["max_nonfinite_fraction"]:
+
+            # Limit the gradient size, then update the weights
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+
+            loss_sum = loss_sum + float(loss)
+
+        # ---- 5b: end of the epoch: lower the learning rate ----
+        scheduler.step()
+        nonfinite_total = nonfinite_total + nonfinite
+
+        # ---- 5c: did training blow up in this epoch? ----
+        if steps == 0:
             diverged = True
-        val = validation_loss(model, data, regime, device) if not diverged else float("inf")
+        elif nonfinite / steps > max_bad_fraction:
+            diverged = True
+
+        # ---- 5d: validation loss, and remember the best weights ----
+        if diverged:
+            val = float("inf")
+        else:
+            val = validation_loss(model, data, regime, device)
+
         if math.isfinite(val) and val < best_val:
-            best_val, best_state = val, copy.deepcopy(model.state_dict())
-        train_loss = loss_sum / max(steps - nonfinite, 1)
-        train_seconds += time.time() - t0
-        log_rows.append({"epoch": epoch + 1, "train_loss": train_loss, "val_loss": val,
-                         "train_horizon": opts.get("train_horizon", H if regime == "chained" else ""),
-                         "lr": opt.param_groups[0]["lr"], "nonfinite_steps": nonfinite,
-                         "seconds": round(time.time() - t0, 2)})
+            best_val = val
+            best_state = copy.deepcopy(model.state_dict())
+
+        # ---- 5e: average training loss over the good batches only ----
+        good_steps = steps - nonfinite
+        if good_steps < 1:
+            good_steps = 1                     # avoid dividing by zero
+        train_loss = loss_sum / good_steps
+
+        # ---- 5f: timing and the log row for this epoch ----
+        epoch_seconds = time.time() - epoch_start_time
+        train_seconds = train_seconds + epoch_seconds
+
+        # How many steps were chained in this epoch (written to train_log.csv)
+        if "train_horizon" in options:
+            chain_length_this_epoch = options["train_horizon"]     # recipe: grows 5 -> 50
+        elif regime == "chained":
+            chain_length_this_epoch = horizon                      # old training: always 50
+        else:
+            chain_length_this_epoch = ""                           # not chained training
+
+        current_lr = optimizer.param_groups[0]["lr"]
+        log_row = {
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "val_loss": val,
+            "train_horizon": chain_length_this_epoch,
+            "lr": current_lr,
+            "nonfinite_steps": nonfinite,
+            "seconds": round(epoch_seconds, 2),
+        }
+        log_rows.append(log_row)
+
         # Show only the two loss numbers on the bar; the full row is saved in train_log.csv
-        bar.set_postfix(loss=f"{train_loss:.2e}", val=f"{val:.2e}")
-        bar.update(1)
+        epoch_bar.set_postfix(loss=f"{train_loss:.2e}", val=f"{val:.2e}")
+        epoch_bar.update(1)
+
+        # The full numbers for this epoch go to the log file
         if log is not None:
             log.detail(f"{position_label} epoch {epoch + 1}: train loss {train_loss:.4e}, "
                        f"validation loss {val:.4e}, non-finite steps {nonfinite}")
-        if (epoch + 1) % int(t_cfg["checkpoint_every"]) == 0 or epoch + 1 == epochs or diverged:
-            torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(),
-                        "scheduler": sched.state_dict(), "generator": gen.get_state(), "epoch": epoch + 1,
-                        "log_rows": log_rows, "best_val": best_val, "best_state": best_state,
-                        "nonfinite_total": nonfinite_total, "diverged": diverged,
-                        "train_seconds": train_seconds}, ckpt_path)
+
+        # ---- 5g: save a checkpoint every few epochs, at the last epoch, or on divergence ----
+        epochs_done = epoch + 1
+        time_to_save = (epochs_done % checkpoint_every == 0)
+        is_last_epoch = (epochs_done == total_epochs)
+
+        if time_to_save or is_last_epoch or diverged:
+            checkpoint = {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "generator": shuffle_generator.get_state(),
+                "epoch": epochs_done,
+                "log_rows": log_rows,
+                "best_val": best_val,
+                "best_state": best_state,
+                "nonfinite_total": nonfinite_total,
+                "diverged": diverged,
+                "train_seconds": train_seconds,
+            }
+            torch.save(checkpoint, checkpoint_path)
             write_train_log(run_dir / "train_log.csv", log_rows)
-    bar.close()
+
+    epoch_bar.close()
     write_train_log(run_dir / "train_log.csv", log_rows)
 
-    if t_cfg.get("select_best_on_validation", True) and best_state is not None:
+    # ------------------------------------------------------------------
+    # Step 6: go back to the best weights (if the config asks for it)
+    # ------------------------------------------------------------------
+    use_best = training_cfg.get("select_best_on_validation", True)
+    if use_best and best_state is not None:
         model.load_state_dict(best_state)
-    torch.save({"model": model.state_dict(), "config": {k: v for k, v in cfg.items() if not k.startswith("_")}},
-               run_dir / "checkpoint.pt")
 
+    final_checkpoint = {
+        "model": model.state_dict(),
+        "config": _public_config(cfg),
+    }
+    torch.save(final_checkpoint, run_dir / "checkpoint.pt")
+
+    # ------------------------------------------------------------------
+    # Step 7: full evaluation, then add training information
+    # ------------------------------------------------------------------
     metrics = evaluate_model(model, cfg, data, device)
-    metrics["training"] = {"diverged_during_training": diverged, "nonfinite_steps": nonfinite_total,
-                           "epochs_run": len(log_rows), "best_val_loss": best_val,
-                           "train_minutes": train_seconds / 60.0}
+
+    metrics["training"] = {
+        "diverged_during_training": diverged,
+        "nonfinite_steps": nonfinite_total,
+        "epochs_run": len(log_rows),
+        "best_val_loss": best_val,
+        "train_minutes": train_seconds / 60.0,
+    }
     metrics["parameters"] = count_parameters(model)
-    metrics["diverged"] = bool(diverged or metrics["primary"]["diverged"])
+
+    # The run counts as diverged if it blew up in training OR in the test rollout
+    diverged_in_test = metrics["primary"]["diverged"]
+    metrics["diverged"] = bool(diverged or diverged_in_test)
+
     save_json(metrics, run_dir / "metrics.json")
     return metrics
 
 
+# ----------------------------------------------------------------------------------------------
+# Evaluation
+# ----------------------------------------------------------------------------------------------
 def evaluate_model(model, cfg: dict, data: dict, device) -> dict:
+    """
+    Evaluate a trained model on the test split.
+
+    "Primary" regime = the way the model was trained to predict:
+        - trained "direct"  -> primary is direct multi-step prediction
+        - anything else     -> primary is chained prediction (feeding its own outputs back)
+    The other regime is also measured, for comparison.
+    """
+    # Step 1: decide which prediction regime is primary
     regime = cfg["training"]["regime"]
-    primary = "direct" if regime == "direct" else "chained"
-    other = "chained" if primary == "direct" else "direct"
-    ev = cfg["evaluation"]
-    C, H = data["context_len"], data["horizon"]
-    test = data["splits"]["test"]
-    out = {"primary_regime": primary,
-           "primary": rollout_errors(model, primary, test, data["norm"], C, H, device, ev["report_steps"]),
-           "other_regime": rollout_errors(model, other, test, data["norm"], C, H, device, ev["report_steps"]),
-           "teacher_forced_one_step_rmse": teacher_forced_one_step(model, test, data["norm"], device),
-           "certificate": certificate_status(model)}
+    if regime == "direct":
+        primary = "direct"
+        other = "chained"
+    else:
+        primary = "chained"
+        other = "direct"
+
+    eval_cfg = cfg["evaluation"]
+    context_len = data["context_len"]
+    horizon = data["horizon"]
+    test_split = data["splits"]["test"]
+    norm = data["norm"]
+
+    # Step 2: the main error numbers
+    primary_errors = rollout_errors(model, primary, test_split, norm, context_len, horizon,
+                                    device, eval_cfg["report_steps"])
+    other_errors = rollout_errors(model, other, test_split, norm, context_len, horizon,
+                                  device, eval_cfg["report_steps"])
+    one_step_rmse = teacher_forced_one_step(model, test_split, norm, device)
+    certificate = certificate_status(model)
+
+    out = {
+        "primary_regime": primary,
+        "primary": primary_errors,
+        "other_regime": other_errors,
+        "teacher_forced_one_step_rmse": one_step_rmse,
+        "certificate": certificate,
+    }
+
+    # Step 3: extra diagnostics.
+    # If a diagnostic crashes, we store the error message instead,
+    # so a finished training run is never lost because of a diagnostic.
     try:
-        out["amplification"] = error_amplification(model, primary, test, data["norm"], data["system"], C, H,
-                                                    ev["jacobian_windows"], device)
-    except Exception as exc:   # a diagnostic must never lose a finished run
+        out["amplification"] = error_amplification(
+            model, primary, test_split, norm, data["system"], context_len, horizon,
+            eval_cfg["jacobian_windows"], device,
+        )
+    except Exception as exc:
         out["amplification"] = {"error": repr(exc)}
+
     try:
-        out["limit_cycle"] = limit_cycle(model, primary, data["norm"], data["system"], C,
-                                         ev["limit_cycle_steps"], ev["limit_cycle_start"], device)
+        out["limit_cycle"] = limit_cycle(
+            model, primary, norm, data["system"], context_len,
+            eval_cfg["limit_cycle_steps"], eval_cfg["limit_cycle_start"], device,
+        )
     except Exception as exc:
         out["limit_cycle"] = {"status": "error", "error": repr(exc)}
+
     return out
 
 
+# ----------------------------------------------------------------------------------------------
+# One row of results.csv
+# ----------------------------------------------------------------------------------------------
 def result_row(arm_cfg: dict, seed: int, metrics: dict) -> dict:
+    """Turn one run's metrics into a flat row for results.csv."""
+    # Step 1: pull out the pieces we need (empty dictionary if a diagnostic is missing)
     arm = arm_cfg["arm"]
-    p = metrics["primary"]
-    amp = metrics.get("amplification", {})
-    lc = metrics.get("limit_cycle", {})
-    cert = metrics.get("certificate", {})
-    return {
-        "arm": arm["name"], "seed": seed, "group": arm.get("group", ""), "role": arm.get("role", ""),
-        "training_regime": arm_cfg["training"]["regime"], "model": arm_cfg["model"]["name"],
-        "decay_mode": arm_cfg["model"].get("decay_mode", ""), "parameters": metrics["parameters"],
-        "diverged": metrics["diverged"], "one_step_rmse": p["one_step_rmse"], "rollout_rmse": p["rollout_rmse"],
-        "error_at_10": p.get("error_at_10"), "error_at_50": p.get("error_at_50"),
-        "growth_1_to_50": p.get("growth_1_to_end"),
+    model_cfg = arm_cfg["model"]
+    primary = metrics["primary"]
+    amplification = metrics.get("amplification", {})
+    limit_cycle_result = metrics.get("limit_cycle", {})
+    certificate = metrics.get("certificate", {})
+    training_info = metrics["training"]
+
+    # Step 2: build the row
+    row = {
+        # which run this is
+        "arm": arm["name"],
+        "seed": seed,
+        "group": arm.get("group", ""),
+        "role": arm.get("role", ""),
+        "training_regime": arm_cfg["training"]["regime"],
+        "model": model_cfg["name"],
+        "decay_mode": model_cfg.get("decay_mode", ""),
+        "parameters": metrics["parameters"],
+
+        # main errors
+        "diverged": metrics["diverged"],
+        "one_step_rmse": primary["one_step_rmse"],
+        "rollout_rmse": primary["rollout_rmse"],
+        "error_at_10": primary.get("error_at_10"),
+        "error_at_50": primary.get("error_at_50"),
+        "growth_1_to_50": primary.get("growth_1_to_end"),
         "other_regime_rollout_rmse": metrics["other_regime"]["rollout_rmse"],
-        "certificate_holds_at_end": cert.get("certificate_holds_at_end"),
-        "fraction_decay_positive": cert.get("fraction_decay_positive"),
-        "model_amplification_median": amp.get("model_amplification_median"),
-        "true_amplification_median": amp.get("true_amplification_median"),
-        "amplification_ratio_median": amp.get("amplification_ratio_median"),
-        "limit_cycle_amplitude_error": lc.get("amplitude_error"),
-        "limit_cycle_period_error": lc.get("period_error"), "limit_cycle_status": lc.get("status"),
-        "nonfinite_steps": metrics["training"]["nonfinite_steps"],
-        "epochs_run": metrics["training"]["epochs_run"],
-        "train_minutes": metrics["training"]["train_minutes"],
+
+        # latent certificate
+        "certificate_holds_at_end": certificate.get("certificate_holds_at_end"),
+        "fraction_decay_positive": certificate.get("fraction_decay_positive"),
+
+        # error amplification (model versus true system)
+        "model_amplification_median": amplification.get("model_amplification_median"),
+        "true_amplification_median": amplification.get("true_amplification_median"),
+        "amplification_ratio_median": amplification.get("amplification_ratio_median"),
+
+        # limit cycle
+        "limit_cycle_amplitude_error": limit_cycle_result.get("amplitude_error"),
+        "limit_cycle_period_error": limit_cycle_result.get("period_error"),
+        "limit_cycle_status": limit_cycle_result.get("status"),
+
+        # training information
+        "nonfinite_steps": training_info["nonfinite_steps"],
+        "epochs_run": training_info["epochs_run"],
+        "train_minutes": training_info["train_minutes"],
     }
+
+    return row
