@@ -95,11 +95,11 @@ def chained_loss(model: DynamicsModel, x, u, context_len: int, horizon: int,
     """
 
     # Step 1: how many steps to chain: always the full horizon (50)
-    if train_horizon is None: steps_to_chain = horizon
+    if train_horizon is None:  steps_to_chain = horizon
     else:
-        step_to_chains = int(train_horizon)
-        step_to_chains = min(step_to_chains, horizon)
-        step_to_chains = max(1, step_to_chains)
+        steps_to_chain = int(train_horizon)
+        steps_to_chain = min(steps_to_chain, horizon)
+        steps_to_chain = max(1, steps_to_chain)
 
     # Step 2: the true starting states (context), and the true future to compare against
     true_context = x[:, :context_len + 1]
