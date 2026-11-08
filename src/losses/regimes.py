@@ -88,14 +88,18 @@ def direct_loss(model: DynamicsModel, x, u, context_len: int, horizon: int):
 
 
 def chained_loss(model: DynamicsModel, x, u, context_len: int, horizon: int,
-                 noise_std: float = 0.0):
+                 noise_std: float = 0.0, train_horizon:int = None, teacher_weight:float = 0.0):
     """
     Chained prediction: the model is fed its OWN predictions, one step after another.
     RAW version: always chain the full horizon, and use only the chained loss.
     """
 
     # Step 1: how many steps to chain: always the full horizon (50)
-    steps_to_chain = horizon
+    if train_horizon is None: steps_to_chain = horizon
+    else:
+        step_to_chain = int(train_horizon)
+        step_to_chain = min(step_to_chain, horizon)
+        step_to_chain = max(1, step_to_chain)
 
     # Step 2: the true starting states (context), and the true future to compare against
     true_context = x[:, :context_len + 1]
@@ -108,6 +112,13 @@ def chained_loss(model: DynamicsModel, x, u, context_len: int, horizon: int,
 
     # Step 4: the chained loss
     loss = mean_squared_error(predictions, true_future)
+        
+    # Step 5 (RECIPE): add the one-step loss, so each single step also stays accurate
+    if teacher_weight > 0:
+        one_step_loss, _ = teacher_forcing_loss(model, x, u)
+        loss = loss + teacher_weight*one_step_loss
+
+
 
     # Step 5: count how many rows hit the clamp
     number_of_bad_rows = int(hit_clamp.sum())
@@ -116,7 +127,7 @@ def chained_loss(model: DynamicsModel, x, u, context_len: int, horizon: int,
 
 
 def regime_loss(model: DynamicsModel, x, u, regime: str, context_len: int, horizon: int,
-                noise_std: float = 0.0):
+                noise_std: float = 0.0, train_horizon = None, teacher_weight: float = 0.0):
     """Main entry point used by the trainer. Returns (loss, number of rows that hit the clamp)."""
 
     if regime == "teacher_forcing":
@@ -131,6 +142,8 @@ def regime_loss(model: DynamicsModel, x, u, regime: str, context_len: int, horiz
             context_len,
             horizon,
             noise_std=noise_std,
+            train_horizon=train_horizon,
+            teacher_weight=teacher_weight
         )
 
     return loss, number_of_bad_rows
