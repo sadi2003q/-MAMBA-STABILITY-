@@ -1,0 +1,90 @@
+# MPC step 1 — bring the Van der Pol oscillator to rest at the origin (position 0, velocity 0)
+# using model predictive control, with three controllers side by side:
+#
+#   no_control          push is always 0 (shows what the oscillator does on its own: it keeps swinging)
+#   perfect_model_mpc   model predictive control that plans with the TRUE equations (best possible reference)
+#   learned_model_mpc   model predictive control that plans with the memory-removed chained predictor
+#
+# Settings follow Cevaal, de Jong and Lazar (2026), Van der Pol stabilisation test:
+#   horizon N = 10, stage weight Q = 50 on position, terminal weight P = 100, weight R = 0.5 on the CHANGE
+#   of the push, 100 starting points with position in [-2.5, 2.5] and velocity in [-2.0, 2.0], sampling time 0.1.
+# They give no numbers for the push limit or the simulation length; ours are below (our choice, to disclose).
+#
+# Run:  python tools/run_mpc.py --config configs/control/mpc01_stabilise.yaml
+
+name: mpc01_stabilise
+
+question: "Can model predictive control that plans with the memory-removed chained predictor bring the oscillator to rest as well as the same controller planning with the true equations?"
+
+hypothesis: >
+  With the memory-removed chained predictor (exp04 arm chain_mamba_no_memory, seed 0), model predictive control
+  brings every starting point to rest, with a position error over the run no more than 20% above the
+  perfect-model controller, and plans faster than the sampling time (0.1 seconds).
+
+math_signal:
+  signal: POSITIVE
+  what_was_checked: >
+    (1) Straight-line approximation of one Euler step at the origin: growth factors 1.054 per step, so on its
+    own the oscillator moves away from rest (about 5% per step) and needs a controller.
+    (2) Controllability: the push reaches both position and velocity (rank 2), so the origin can be reached.
+    (3) A linear-quadratic regulator with the same position weight (50) and input weight (0.5) shrinks the
+    distance to the origin by a factor 0.81 per step, so a 10-step plan has enough room to work.
+    (4) The predictor's 50-step chained error is 0.048 in normalised units (exp04, seed 0); over the
+    10-step plan the error should be smaller still.
+  prediction: >
+    perfect_model_mpc and learned_model_mpc both bring all 100 starts to rest; learned_model_mpc's position
+    error over the run within 20% of perfect_model_mpc; no_control never comes to rest (it settles on the
+    limit cycle, a loop of size about 2 in position).
+  assumptions: >
+    straight-line approximation valid only near the origin; the push limit of 15 is active at the start for
+    far-away starting points (the regulator would ask for about 27), so the first steps are not linear;
+    one seed of the predictor shows direction only.
+
+# The trained predictor. Can be changed from the command line with --checkpoint.
+# The main branch has no memory-removed model (that lives on branch chain-mamba-recipe), so the default here
+# is the stored Chain-Mamba with memory (exp03, seed 0). The memory-removed checkpoint needs the
+# chain-mamba-recipe code to load (the `mixer` switch).
+checkpoint: models/seed0/exp03_chain_mamba/chain_mamba_recipe_seed0/checkpoint.pt
+
+controller:
+  horizon: 10                 # N: how many steps ahead the controller plans
+  target: [0.0, 0.0]          # where we want the oscillator: position 0, velocity 0
+  q_position: 50.0            # Q: penalty on position error at steps 1 .. N-1
+  q_velocity: 0.0             # Cevaal et al. score position only (their output is position)
+  p_position: 100.0           # P: penalty on position error at the last planned step N
+  p_velocity: 0.0
+  r_input_change: 0.5         # R: penalty on the change of the push from one step to the next
+  u_max: 15.0                 # push limit: the training data never pushed harder than 15
+
+solver:
+  iterations: 50              # improvement rounds per control step (gradient descent with Adam)
+  learning_rate: 0.5          # how far one round may move each push (push units)
+
+test:
+  starts: 100                 # number of starting points
+  start_seed: 2026            # the same starting points for every controller
+  start_low: [-2.5, -2.0]     # [position, velocity]
+  start_high: [2.5, 2.0]
+  steps: 100                  # control steps per run (100 x 0.1 = 10 seconds)
+  settle_radius: 0.05         # "at rest" = distance to the target below this
+  timing_steps: 30            # one oscillator alone, to measure planning time for one control step
+
+predictor_check:
+  windows: 200                # test-data pieces used to check the learned predictor before control starts
+
+decision_rule:
+  # Fixed before any result. learned_model_mpc is "worth continuing" (go to tracking and noise tests) if ALL hold:
+  all_starts_at_rest: true                 # every start is at rest at the end
+  position_error_tolerance_percent: 20     # median position error <= perfect_model_mpc's median x 1.20
+  planning_time_below_seconds: 0.1         # median planning time for one oscillator below the sampling time
+
+# Applied on top when --quick yes is given. Code check only, never interpret the numbers.
+quick:
+  solver:
+    iterations: 10
+  test:
+    starts: 5
+    steps: 20
+    timing_steps: 5
+  predictor_check:
+    windows: 20

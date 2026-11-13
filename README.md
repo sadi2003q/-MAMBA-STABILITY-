@@ -537,3 +537,24 @@ Options of `train.py`:
 | `--device` | auto / cpu / cuda / mps | auto | where to train |
 
 On the Mac, run the same commands from the repository folder with plain `python` and relative paths; set up once with `bash scripts/setup_env.sh`.
+
+### Model predictive control, step 1 — bring the oscillator to rest
+
+Settings, hypothesis and decision rule: `configs/control/mpc01_stabilise.yaml`. Code: `src/control/` (predictors,
+controller, closed loop) and `tools/run_mpc.py`. On this branch the default predictor is the stored Chain-Mamba
+(`models/seed0/exp03_chain_mamba/chain_mamba_recipe_seed0/checkpoint.pt`); the memory-removed predictor needs the
+code on branch `chain-mamba-recipe`.
+
+```bash
+# code check (under a minute; do not interpret)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/run_mpc.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/control/mpc01_stabilise.yaml \
+    --quick yes
+
+# the real run: 3 controllers x 100 starting points x 100 steps
+!python /kaggle/working/-MAMBA-STABILITY-/tools/run_mpc.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/control/mpc01_stabilise.yaml \
+    --device cpu
+```
+
+Results: `outputs/mpc01_stabilise/summary.md`, `results.csv`, `metrics.json`, `figures/`, details in `log.txt`.

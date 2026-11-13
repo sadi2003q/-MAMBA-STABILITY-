@@ -1,1 +1,1 @@
-"""Model predictive control (later phase, Step 8 of plan.md)."""
+"""Model predictive control: predictors (true equations, learned model), the controller, the closed loop."""
