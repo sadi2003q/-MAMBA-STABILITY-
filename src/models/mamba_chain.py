@@ -291,6 +291,10 @@ class ChainMambaLayer(nn.Module):
             state (convolution buffer, memory) from before this sequence, or None to start from zeros
         Returns (output [B, T, d_model], new state).
         """
+        if not self.mixer:
+            output = self._ffn(x)
+            return output, None
+
         batch_size = x.shape[0]
 
         # Step 1: normalise and split into the memory branch xi and the gate branch z
@@ -338,7 +342,9 @@ class ChainMambaLayer(nn.Module):
             state (convolution buffer, memory) from the previous step, or None at the very start
         Returns (output [B, d_model], new state).  Same maths as sequence(), for one step.
         """
-        batch_size = x.shape[0]
+        if not self.mixer:
+            output = self._ffn(x)
+            return output, None
 
         # Step 1: normalise and split into the memory branch xi and the gate branch z
         both = self.in_proj(self.norm(x))
@@ -391,7 +397,7 @@ class ChainMambaCore(nn.Module):
     def __init__(self, in_dim: int, d_model: int = 16, d_state: int = 8, d_conv: int = 4, n_layers: int = 2,
                  expand: int = 1, dt_rank: int = 1, dt_min: float = 0.06, dt_max: float = 0.5,
                  delta_floor: float = 0.05, a_min: float = 1.0, ffn_hidden: int = 24, bias: bool = True,
-                 final_norm: bool = False, use_parallel_scan: bool = True):
+                 final_norm: bool = False, use_parallel_scan: bool = True, mixer: bool = True):
         super().__init__()
 
         # Step 1: settings
@@ -404,7 +410,7 @@ class ChainMambaCore(nn.Module):
         layer_list = []
         for _ in range(n_layers):
             layer = ChainMambaLayer(d_model, d_state, d_conv, expand, dt_rank, dt_min, dt_max, delta_floor,
-                                    a_min, ffn_hidden, bias)
+                                    a_min, ffn_hidden, bias, mixer)
             layer_list.append(layer)
         self.layers = nn.ModuleList(layer_list)
 
@@ -461,12 +467,20 @@ class ChainMambaCore(nn.Module):
         """The decay-rate modules of every layer (used to check the certificate)."""
         modules = []
         for layer in self.layers:
-            modules.append(layer.decay)
+            # a layer without memory has no decay rates to check
+            if layer.mixer:
+                modules.append(layer.decay)
         return modules
 
     def rho_max(self) -> float:
         """The largest guaranteed decay-factor bound over all layers."""
         bounds = []
         for layer in self.layers:
-            bounds.append(layer.rho_max())
+            # a layer without memory has no decay factor, so no bound
+            if layer.mixer:
+                bounds.append(layer.rho_max())
+
+        # no memory anywhere -> nothing can grow -> report 0.0
+        if len(bounds) == 0:
+            return 0.0
         return max(bounds)

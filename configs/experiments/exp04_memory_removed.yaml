@@ -1,0 +1,65 @@
+name: exp04_memory_removed
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "If we remove Chain-Mamba's memory and keep everything else, does 50-step chained prediction get worse?"
+hypothesis: >
+  Chain-Mamba with the selective state-space memory removed (gated feed-forward layers only, widened to keep
+  the same size) gives a 50-step chained error no worse than Chain-Mamba with memory, both with the recipe.
+  The memory-removed arm was added after the first Chain-Mamba results (3 November 2026) - to be disclosed.
+
+math_signal:
+  signal: POSITIVE that memory is not needed; INCONCLUSIVE on why removing it helps
+  what_was_checked: >
+    (1) The Van der Pol step depends only on the current state and push, and both are given to the model,
+    so the best possible chained predictor needs no memory. (2) Chain-Mamba's trained memory forgets fast
+    (median decay 0.50-0.55, largest 0.89). (3) Size: 3,286 parameters without memory (feed-forward 44 hidden
+    units) against 3,310 with memory, less than 1% apart.
+  prediction: >
+    chain_mamba_no_memory: 50-step error inside 0.044-0.053 (archive 0.0484) and below chain_mamba_recipe;
+    chain_mamba_recipe: inside 0.060-0.073 (archive 0.0664; this machine gave 0.0653).
+  assumptions: processor only; same data, seed and recipe for both arms; single seed shows direction only
+
+arms:
+  - name: chain_mamba_recipe
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: baseline
+    overrides: &recipe
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: Chain-Mamba with memory and the recipe (the same as exp03)
+
+  - name: chain_mamba_no_memory
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: {mixer: false, ffn_hidden: 44}     # 3,286 parameters: the two gated feed-forward layers only
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: the same model and recipe with the memory removed, widened to keep the same size
+
+decision_rule:
+  type: ablation
+  metric: rollout_rmse          # root-mean-square error averaged over the 50 chained-prediction steps
+  threshold_percent: 20
