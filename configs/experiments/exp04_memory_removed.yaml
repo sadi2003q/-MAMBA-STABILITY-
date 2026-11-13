@@ -58,7 +58,107 @@ arms:
         state_noise_std: 0.0
         checkpoint_every: 5
     why: the same model and recipe with the memory removed, widened to keep the same size
+  - name: no_memory_176
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: { mixer: false, ffn_hidden: 176 }    # 12,790 parameters
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: { start: 5, epochs: 25 }
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: width sweep - memory removed, widest setting
 
+  - name: with_memory_176
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: { mixer: true, ffn_hidden: 176 }     # 14,542 parameters
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: { start: 5, epochs: 25 }
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: width sweep - memory kept, same width, for a fair comparison
+
+  - name: chain_mamba_wide
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: { ffn_hidden: 44 }     # memory KEPT, thinking room as wide as no_memory -> 5,038 parameters
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: { start: 5, epochs: 25 }
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: >
+      width control - is the memory-removed gain from removing the memory, or from the wider thinking room?
+      Prediction (written before the run): 50-step error near Chain-Mamba's 0.0653, clearly above 0.0476.
+
+  - name: no_memory_88
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: { mixer: false, ffn_hidden: 88 }     # 6,454 parameters
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: { start: 5, epochs: 25 }
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: width sweep - memory removed, width 88
+
+  - name: with_memory_88
+    model: ../models/chain_mamba.yaml
+    training_regime: chained
+    group: chained
+    role: control
+    overrides:
+      model: { mixer: true, ffn_hidden: 88 }      # 8,206 parameters
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: { start: 5, epochs: 25 }
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: width sweep - memory kept, width 88, for a fair comparison
 decision_rule:
   type: ablation
   metric: rollout_rmse          # root-mean-square error averaged over the 50 chained-prediction steps
