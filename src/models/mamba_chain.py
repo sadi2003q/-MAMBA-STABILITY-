@@ -345,6 +345,7 @@ class ChainMambaLayer(nn.Module):
         if not self.mixer:
             output = self._ffn(x)
             return output, None
+        batch_size = x.shape[0]
 
         # Step 1: normalise and split into the memory branch xi and the gate branch z
         both = self.in_proj(self.norm(x))
