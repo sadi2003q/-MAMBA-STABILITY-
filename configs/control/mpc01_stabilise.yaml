@@ -40,11 +40,10 @@ math_signal:
     far-away starting points (the regulator would ask for about 27), so the first steps are not linear;
     one seed of the predictor shows direction only.
 
-# The trained predictor. Can be changed from the command line with --checkpoint.
-# The main branch has no memory-removed model (that lives on branch chain-mamba-recipe), so the default here
-# is the stored Chain-Mamba with memory (exp03, seed 0). The memory-removed checkpoint needs the
-# chain-mamba-recipe code to load (the `mixer` switch).
-checkpoint: models/seed0/exp03_chain_mamba/chain_mamba_recipe_seed0/checkpoint.pt
+# The trained predictor (exp04_memory_removed, arm chain_mamba_no_memory, seed 0). train.py writes it here.
+# Can be changed from the command line with --checkpoint, for example the stored Chain-Mamba with memory:
+#   --checkpoint models/seed0/exp03_chain_mamba/chain_mamba_recipe_seed0/checkpoint.pt
+checkpoint: outputs/exp04_memory_removed/runs/chain_mamba_no_memory_seed0/checkpoint.pt
 
 controller:
   horizon: 10                 # N: how many steps ahead the controller plans

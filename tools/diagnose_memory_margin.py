@@ -36,6 +36,8 @@ def layer_decays(model, inp):
     out = []
     h = model.core.embed(inp)
     for layer in model.core.layers:
+        if isinstance(layer, ChainMambaLayer) and not layer.mixer:
+            return None                     # memory removed: no decay factors to show
         if isinstance(layer, ChainMambaLayer):
             xi, _ = layer.in_proj(layer.norm(h)).chunk(2, dim=-1)
             xc, _ = layer._conv(xi, h.new_zeros(h.shape[0], layer.E, layer.d_conv - 1))
@@ -77,7 +79,7 @@ def main():
         res = layer_decays(model, model._inp(x[:, :-1], u, 0.0))
         print(f"\n{run.name}  ({cfg['model']['name']})")
         if res is None:
-            print("  no selective state-space layers: skipped")
+            print("  no selective state-space memory (or memory removed): skipped")
             continue
         for i, (a, dt) in enumerate(res):
             print(f"  layer {i}: decay median {np.median(a):.3f}, largest {a.max():.4f}, "

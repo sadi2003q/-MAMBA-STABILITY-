@@ -77,3 +77,9 @@ Dated record of what was decided and why. Newest last.
 - **Rule** (in `configs/control/mpc01_stabilise.yaml`): worth continuing if every start comes to rest, median position error at most 20% above the true-equations controller, and median planning time for one oscillator below 0.1 seconds.
 - **Literature checked before writing the code.** Cevaal et al. (2604.13857): cost on position (their output) plus input change, IPOPT, metrics ISE / IAE / input energy, memory reset at every control step. Gradient-based model predictive control with learned PyTorch models (projected gradient on the input sequence) is common for neural predictors; CasADi wrappers (L4CasADi) are the usual next step.
 - Code: `src/control/predictors.py`, `src/control/mpc.py`, `src/control/closed_loop.py`, `tools/run_mpc.py`.
+
+## 15 November 2026 — Memory switch and exp04 brought to the main branch
+
+- `src/models/mamba_chain.py`: beginner-friendly version with the `mixer` option (from branch `chain-mamba-recipe`, where it reproduced the archive: memory removed 0.0476 against Chain-Mamba 0.0653, seed 0, processor). With `mixer: true` (the default) every calculation, parameter name and random draw is the same as before, so the stored exp03 models still load and give the same numbers.
+- `configs/experiments/exp04_memory_removed.yaml` added. The model predictive control config now plans with the memory-removed predictor by default.
+- First full model predictive control run on main (Chain-Mamba with memory, stored exp03 seed-0 model): 100 of 100 starts at rest for both controllers, position error 4.18 against 4.0 with the true equations (+4%), but planning took 497 ms per step against the 100 ms limit (true equations: 92 ms) → NOT YET, because of planning time only.

@@ -305,7 +305,10 @@ def main():
 
     if not checkpoint_path.exists():
         log.say(f"  Trained predictor not found: {checkpoint_path}")
-        log.say("  Pass a trained predictor with --checkpoint PATH (see configs/control/mpc01_stabilise.yaml).")
+        log.say("  Train it first (memory-removed arm, seed 0, processor), for example:")
+        log.say("    python train.py --config configs/experiments/exp04_memory_removed.yaml "
+                "--arms chain_mamba_no_memory --seed 0 --device cpu --ask-first no")
+        log.say("  or pass another trained predictor with --checkpoint PATH.")
         log.close()
         sys.exit(1)
 

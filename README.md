@@ -538,14 +538,41 @@ Options of `train.py`:
 
 On the Mac, run the same commands from the repository folder with plain `python` and relative paths; set up once with `bash scripts/setup_env.sh`.
 
+### exp04 — Chain-Mamba with the memory removed
+
+Config: `configs/experiments/exp04_memory_removed.yaml`. The model option `mixer: false` (in
+`src/models/mamba_chain.py`) removes the selective state-space memory from every layer and keeps only the gated
+feed-forward part. Arms: `chain_mamba_recipe` (memory kept, baseline), `chain_mamba_no_memory` (memory removed,
+widened to 3,286 parameters), and the width controls `chain_mamba_wide`, `no_memory_88`, `with_memory_88`,
+`no_memory_176`, `with_memory_176`. Seed-0 results (processor, 50-step chained error): memory removed 0.0476 against
+Chain-Mamba 0.0653; without memory is lower at every width.
+
+```bash
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp04_memory_removed.yaml \
+    --arms chain_mamba_recipe chain_mamba_no_memory \
+    --seed 0 \
+    --device cpu \
+    --ask-first no
+```
+
 ### Model predictive control, step 1 — bring the oscillator to rest
 
 Settings, hypothesis and decision rule: `configs/control/mpc01_stabilise.yaml`. Code: `src/control/` (predictors,
-controller, closed loop) and `tools/run_mpc.py`. On this branch the default predictor is the stored Chain-Mamba
-(`models/seed0/exp03_chain_mamba/chain_mamba_recipe_seed0/checkpoint.pt`); the memory-removed predictor needs the
-code on branch `chain-mamba-recipe`.
+controller, closed loop) and `tools/run_mpc.py`. The default predictor is the memory-removed Chain-Mamba from exp04
+(`outputs/exp04_memory_removed/runs/chain_mamba_no_memory_seed0/checkpoint.pt`), so train that arm first on a fresh
+machine (processor, to match the exp04 numbers). The stored Chain-Mamba with memory can be used instead with
+`--checkpoint models/seed0/exp03_chain_mamba/chain_mamba_recipe_seed0/checkpoint.pt`.
 
 ```bash
+# only if the memory-removed predictor is not trained on this machine yet
+!python /kaggle/working/-MAMBA-STABILITY-/train.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/experiments/exp04_memory_removed.yaml \
+    --arms chain_mamba_no_memory \
+    --seed 0 \
+    --device cpu \
+    --ask-first no
+
 # code check (under a minute; do not interpret)
 !python /kaggle/working/-MAMBA-STABILITY-/tools/run_mpc.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/control/mpc01_stabilise.yaml \
