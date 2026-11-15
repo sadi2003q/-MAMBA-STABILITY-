@@ -1,0 +1,46 @@
+# MPC step 1c — the same test as mpc01b_faster_solver, with OFFSET-FREE control switched on.
+# Written on 15 November 2026, AFTER mpc01b: the learned-model controller ended EVERY start at the same small
+# distance from rest (median 0.0485, largest 0.0507; true-equations controller 0.0038), so 99 of 100 were
+# "at rest". That pattern is a steady-state offset caused by a small model bias near rest, not the solver
+# (50 rounds gave the same offset, 0.0434). To be disclosed as a follow-up change.
+#
+# Offset-free control (standard for learned models: GRU, LSTM and NARX model predictive control):
+#   every step, compare the predictor's one-step prediction with the measured state, keep a running average of
+#   the difference ("disturbance"), and add it to every predicted step of the next plan.
+#   Code: src/control/mpc.py (_update_disturbance) and the `disturbance` argument in src/control/predictors.py.
+#
+# Run:  python tools/run_mpc.py --config configs/control/mpc01c_offset_free.yaml
+
+inherit: [mpc01b_faster_solver.yaml]
+
+name: mpc01c_offset_free
+
+question: "With offset-free control (a correction estimated from what really happened), does the learned-model controller bring every start to rest, as close as the true-equations controller, and still plan within the sampling time?"
+
+hypothesis: >
+  Adding a constant correction estimated from the measured one-step mismatch removes the learned-model
+  controller's steady-state offset: all 100 starts at rest, position error within 20% of the true-equations
+  controller, planning time still below 0.1 seconds.
+
+math_signal:
+  signal: POSITIVE
+  what_was_checked: >
+    (1) Fixed-point argument: at rest (x*, u*) the real oscillator satisfies x* = f(x*, u*). The correction then
+    settles at d* = x* - f_model(x*, u*) = f(x*, u*) - f_model(x*, u*), so the corrected predictor
+    f_model + d* is exactly right at rest, and the controller's "rest" equals the real rest: no offset. The
+    running-average filter (0.5) changes how fast d settles, not where it settles.
+    (2) Size: the offset (0.043-0.051) is the same for all 100 starts and did not change with the number of
+    solver rounds, which fits a fixed model error near rest (the assumption the argument needs).
+    (3) Cost: one extra one-step prediction per control step, about 1-2% of the 20 solver rounds.
+  prediction: >
+    learned_model_mpc: final distance median below 0.01 (from 0.0485), 100 of 100 at rest, position error within
+    20% of perfect_model_mpc, planning time about the same as mpc01b (81 ms), below 100 ms.
+    perfect_model_mpc: unchanged (its mismatch is zero up to rounding).
+  assumptions: >
+    the model's error near rest is close to constant; full state measured without noise (this test);
+    away from rest the correction follows a changing error, so the first second may change slightly;
+    one seed of the predictor shows direction only.
+
+controller:
+  offset_free: true           # estimate and add the correction (both model predictive controllers)
+  disturbance_filter: 0.5     # running average: half old correction, half newest mismatch

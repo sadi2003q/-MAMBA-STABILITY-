@@ -72,10 +72,58 @@ class MPCController:
         # Step 5: the plan from the previous control step (used as the starting guess). None = no plan yet
         self.previous_plan = None
 
+        # Step 6: offset-free control (optional; not in the config -> off, exactly as before)
+        #   offset_free         True -> estimate a fixed correction from what really happened, add it to predictions
+        #   disturbance_filter  how much of each new measurement to trust (1.0 = only the newest, 0.5 = average)
+        self.offset_free = bool(controller_cfg.get("offset_free", False))
+        self.disturbance_filter = float(controller_cfg.get("disturbance_filter", 1.0))
+        self.disturbance = None       # the current correction [S, 2], physical units (None = none yet)
+        self.last_state = None        # the state at the previous control step [S, 2]
+
     # ------------------------------------------------------------------------------------------------------
     def reset(self) -> None:
-        """Forget the previous plan (call this before starting a new run)."""
+        """Forget the previous plan and the correction (call this before starting a new run)."""
         self.previous_plan = None
+        self.disturbance = None
+        self.last_state = None
+
+    # ------------------------------------------------------------------------------------------------------
+    def _update_disturbance(self, x_now: torch.Tensor, u_previous: torch.Tensor) -> None:
+        """
+        Offset-free control: how wrong was the predictor's LAST one-step prediction?
+
+            0.1 s ago the state was last_state and we applied push u_previous.
+            The predictor (without any correction) says we should now be at  predicted_now.
+            We really are at x_now.  mismatch = x_now - predicted_now.
+
+        The correction is a running average of these mismatches:
+            correction = (1 - filter) x old correction + filter x mismatch
+
+        Why this removes the offset: when the oscillator comes to rest, the mismatch stops changing, so the
+        correction becomes exactly the predictor's error at that point. The corrected predictor is then
+        exactly right at rest, and the controller's idea of "rest" becomes the real rest.
+        """
+        # Step 1: nothing to do if switched off, or at the first step of a run (nothing to compare yet)
+        if not self.offset_free:
+            return
+        if self.last_state is None:
+            return
+
+        with torch.no_grad():
+            # Step 2: the predictor's one-step prediction from 0.1 s ago, WITHOUT any correction
+            push_as_plan = u_previous.reshape(-1, 1)                         # [S] -> [S, 1]: a plan of 1 push
+            one_step = self.predictor.predict(self.last_state, push_as_plan)  # [S, 1, 2]
+            predicted_now = one_step[:, 0, :]                                 # [S, 2]
+
+            # Step 3: how far off was it?
+            mismatch = x_now - predicted_now                                  # [S, 2]
+
+            # Step 4: update the running average
+            if self.disturbance is None:
+                self.disturbance = self.disturbance_filter * mismatch
+            else:
+                keep = 1.0 - self.disturbance_filter
+                self.disturbance = keep * self.disturbance + self.disturbance_filter * mismatch
 
     # ------------------------------------------------------------------------------------------------------
     def cost(self, x_now: torch.Tensor, u_plan: torch.Tensor, u_previous: torch.Tensor) -> torch.Tensor:
@@ -88,7 +136,8 @@ class MPCController:
         """
 
         # Step 1: imagine the future with the predictor  -> [S, N, 2]
-        predicted = self.predictor.predict(x_now, u_plan)
+        # (self.disturbance is None unless offset-free control is switched on)
+        predicted = self.predictor.predict(x_now, u_plan, self.disturbance)
 
         number_of_systems = x_now.shape[0]
         total = torch.zeros(number_of_systems, dtype=torch.float32, device=self.device)
@@ -147,6 +196,9 @@ class MPCController:
         """
         number_of_systems = x_now.shape[0]
 
+        # Step -1: offset-free control: update the correction from what happened since the last step
+        self._update_disturbance(x_now, u_previous)
+
         # Step 0: how many improvement rounds this time?
         #   first plan of a run: no warm start (all pushes 0) -> more rounds (first_iterations)
         #   every later plan: starts from the shifted old plan -> fewer rounds are enough (iterations)
@@ -202,5 +254,6 @@ class MPCController:
 
         # Step 6: keep the best plan for the warm start next time, return its first push
         self.previous_plan = best_plan
+        self.last_state = x_now.detach().clone()     # remembered for the next correction update
         first_push = best_plan[:, 0].clone()
         return first_push

@@ -13,6 +13,10 @@ Both predictors in this file have the same method, so the controller can use eit
         u_plan  [S, N]      N planned pushes for each oscillator, physical units
         returns [S, N, 2]   predicted state after push 1, after push 2, ..., after push N
 
+    Optional third argument (used by offset-free control, see src/control/mpc.py):
+        disturbance [S, 2]  a fixed correction, physical units, added to the state after EVERY predicted step.
+                            None (the default) = no correction, exactly the plain prediction.
+
 S is the number of oscillators we control at the same time (100 starting points -> S = 100).
 They never affect each other: row s of the answer depends only on row s of x_now and u_plan.
 This is the same "batch" idea as in training (many windows at once), just used for control.
@@ -51,7 +55,7 @@ class TrueModelPredictor:
         else:
             self.k = 0.0
 
-    def predict(self, x_now: torch.Tensor, u_plan: torch.Tensor) -> torch.Tensor:
+    def predict(self, x_now: torch.Tensor, u_plan: torch.Tensor, disturbance=None) -> torch.Tensor:
         # Step 1: how many pushes are planned
         number_of_pushes = u_plan.shape[1]
 
@@ -72,11 +76,16 @@ class TrueModelPredictor:
             new_position = position + self.dt * position_change_rate
             new_velocity = velocity + self.dt * velocity_change_rate
 
-            # 3c: the new state becomes the current state for the next push
+            # 3c: offset-free control only: add the estimated correction (one number each)
+            if disturbance is not None:
+                new_position = new_position + disturbance[:, 0]
+                new_velocity = new_velocity + disturbance[:, 1]
+
+            # 3d: the new state becomes the current state for the next push
             position = new_position
             velocity = new_velocity
 
-            # 3d: store this predicted state as [S, 2]
+            # 3e: store this predicted state as [S, 2]
             state_after_push = torch.stack([position, velocity], dim=1)
             predicted_states.append(state_after_push)
 
@@ -130,7 +139,7 @@ class LearnedModelPredictor:
             if getattr(layer, "mixer", False):
                 self.has_memory = True
 
-    def predict(self, x_now: torch.Tensor, u_plan: torch.Tensor) -> torch.Tensor:
+    def predict(self, x_now: torch.Tensor, u_plan: torch.Tensor, disturbance=None) -> torch.Tensor:
         # Step 1: sizes
         number_of_systems = x_now.shape[0]
         number_of_pushes = u_plan.shape[1]
@@ -143,6 +152,11 @@ class LearnedModelPredictor:
 
         # Step 4: empty memory at the start of every plan (None = nothing remembered)
         memory = None
+
+        # Step 4b: offset-free control only: the correction in normalised units
+        #   physical correction d  ->  normalised correction d / x_std  (the mean cancels for a CHANGE)
+        if disturbance is not None:
+            disturbance_normalised = disturbance / self.x_std
 
         # Step 5: chained prediction, one push at a time
         predicted_states = []
@@ -160,8 +174,10 @@ class LearnedModelPredictor:
             # 5d: the read-out gives the CHANGE of the state (the increment), as in training
             increment = self.model._increment(features, model_input)
 
-            # 5e: next state = current state + change, then the safety clamp
+            # 5e: next state = current state + change (+ correction), then the safety clamp
             x = x + increment
+            if disturbance is not None:
+                x = x + disturbance_normalised
             x = torch.clamp(x, -self.clamp, self.clamp)
 
             # 5f: store the prediction in physical units

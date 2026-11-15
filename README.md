@@ -586,7 +586,12 @@ machine (processor, to match the exp04 numbers). The stored Chain-Mamba with mem
 !python /kaggle/working/-MAMBA-STABILITY-/tools/run_mpc.py \
     --config /kaggle/working/-MAMBA-STABILITY-/configs/control/mpc01b_faster_solver.yaml \
     --device cpu
+# step 1c: faster solver + offset-free control (removes the learned model's small offset at rest)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/run_mpc.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/control/mpc01c_offset_free.yaml \
+    --device cpu
 ```
+
 
 
 Results: `outputs/mpc01_stabilise/summary.md`, `results.csv`, `metrics.json`, `figures/`, details in `log.txt`.
