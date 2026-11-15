@@ -69,6 +69,8 @@ class MPCController:
         number_of_systems = x_now.shape[0]
         total = torch.zeros(number_of_systems, dtype=torch.float, device=self.device)
 
+
+        # Loop: shows the error from Prediction
         last_step = self.horizon - 1
         for k in range(self.horizon):
             position_error = predicted[:, k, 0] - self.target_position
@@ -82,10 +84,14 @@ class MPCController:
                 weight_position = self.q_position
                 weight_velocity = self.q_velocity
 
-            step_cost = weight_position * position_error * position_error \
-                        + weight_velocity * velocity_error * velocity_error
+            position_error_cost = weight_position * position_error**2
+            velocity_error_cost = weight_velocity * velocity_error**2
+
+            step_cost = position_error_cost + velocity_error_cost
             total = total + step_cost
 
+
+        # error from Changing Push
         push_before = u_previous
         for k in range(self.horizon):
             push_now = u_plan[:, k]
@@ -145,7 +151,6 @@ class MPCController:
                     best_plan[s] = u_plan.detach()[s]
 
             total_cost.backward()
-
             optimiser.step()
 
         with torch.no_grad():
