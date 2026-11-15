@@ -62,6 +62,13 @@ class MPCController:
         self.iterations = int(solver_cfg["iterations"])
         self.learning_rate = float(solver_cfg["learning_rate"])
 
+        # rounds for the very FIRST plan of a run (no warm start yet, pushes start at 0).
+        # Not in the config -> the same as `iterations` (so older configs behave exactly as before).
+        if "first_iterations" in solver_cfg:
+            self.first_iterations = int(solver_cfg["first_iterations"])
+        else:
+            self.first_iterations = self.iterations
+
         # Step 5: the plan from the previous control step (used as the starting guess). None = no plan yet
         self.previous_plan = None
 
@@ -140,6 +147,14 @@ class MPCController:
         """
         number_of_systems = x_now.shape[0]
 
+        # Step 0: how many improvement rounds this time?
+        #   first plan of a run: no warm start (all pushes 0) -> more rounds (first_iterations)
+        #   every later plan: starts from the shifted old plan -> fewer rounds are enough (iterations)
+        if self.previous_plan is None:
+            rounds = self.first_iterations
+        else:
+            rounds = self.iterations
+
         # Step 1: the numbers the solver is allowed to change: the planned pushes
         u_plan = self._starting_guess(number_of_systems)
         u_plan.requires_grad_(True)
@@ -152,7 +167,7 @@ class MPCController:
         best_cost = [float("inf")] * number_of_systems
 
         # Step 4: the improvement rounds
-        for _ in range(self.iterations):
+        for _ in range(rounds):
             optimizer.zero_grad()
 
             # 4a: cost of the current plans, and their sum

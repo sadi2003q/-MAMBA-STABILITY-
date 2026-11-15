@@ -288,6 +288,14 @@ def main():
     set_seed(0)
     device = pick_device(args.device)
 
+    # Optional: how many processor threads PyTorch may use.
+    # For a very small model, splitting tiny calculations over many threads often costs more time than it saves.
+    # Not in the config -> PyTorch's own default (so older configs behave exactly as before).
+    if "threads" in solver_cfg:
+        number_of_threads = int(solver_cfg["threads"])
+        torch.set_num_threads(number_of_threads)
+        log.detail(f"PyTorch processor threads set to {number_of_threads}")
+
     log.say(f"Model predictive control — {cfg['name']}")
     if args.quick:
         log.say("  QUICK MODE: code check only — do not interpret the numbers")

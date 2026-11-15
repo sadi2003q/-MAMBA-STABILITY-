@@ -1,0 +1,43 @@
+# MPC step 1b — the same test as mpc01_stabilise, with a FASTER solver.
+# Everything (controller weights, push limit, starting points, decision rule) is inherited unchanged;
+# only the solver settings differ. Written on 15 November 2026, AFTER mpc01_stabilise failed only on
+# planning time (learned model 201 ms per step, limit 100 ms) - to be disclosed as a follow-up change.
+#
+# Run:  python tools/run_mpc.py --config configs/control/mpc01b_faster_solver.yaml
+
+inherit: [mpc01_stabilise.yaml]
+
+name: mpc01b_faster_solver
+
+question: "With a faster solver (one processor thread, fewer improvement rounds after the first plan), does the learned-model controller plan within the sampling time and still bring the oscillator to rest as well as the true-equations controller?"
+
+hypothesis: >
+  With one processor thread and 20 improvement rounds per plan (50 for the first plan of a run, which has no
+  warm start), the memory-removed controller plans in under 0.1 seconds per step, still brings all 100 starts
+  to rest, and its position error stays within 20% of the true-equations controller (which uses the same solver).
+
+math_signal:
+  signal: POSITIVE (but close to the limit)
+  what_was_checked: >
+    (1) Planning time grows in proportion to the number of rounds: 201 ms x 20 / 50 = about 80 ms, before any
+    gain from using one thread. (2) Warm start: after the first plan, the starting guess is the previous plan
+    shifted by one step, already close to the answer, so fewer rounds should cost little accuracy.
+    (3) Cold start: each Adam round moves a push by about the step size 0.5, so reaching the push limit of 15
+    from 0 needs about 30 rounds; that is why the first plan keeps 50 rounds.
+  prediction: >
+    learned_model_mpc: planning time about 50-80 ms (below 100 ms), 100 of 100 at rest, position error within
+    20% of perfect_model_mpc; perfect_model_mpc: planning time well below 100 ms.
+  assumptions: >
+    timing measured on the same processor as mpc01_stabilise; planning time is mostly per-round overhead,
+    so it scales with the number of rounds; one seed of the predictor shows direction only.
+
+solver:
+  iterations: 20              # rounds for every plan after the first (warm start)
+  first_iterations: 50        # rounds for the first plan of a run (no warm start, pushes start at 0)
+  learning_rate: 0.5          # unchanged
+  threads: 1                  # PyTorch processor threads
+
+quick:
+  solver:
+    iterations: 10
+    first_iterations: 10
