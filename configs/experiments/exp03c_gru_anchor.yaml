@@ -1,0 +1,65 @@
+name: exp03c_gru_anchor
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Is a second standard recurrent network, the gated recurrent unit, any better than the Long Short-Term Memory network when both get the same anchor and the same new training recipe?"
+hypothesis: >
+  The gated recurrent unit with the anchor and the new recipe has a 50-step chained-prediction error within
+  20% of the Long Short-Term Memory network with the anchor and the new recipe (exp03b: 0.081 on the home
+  Ubuntu processor, seed 0).
+
+# --------------------------------------------------------------------------------------------
+# Why this experiment exists (written 17 November 2026, before any result):
+#
+# exp03b gave the fair Long Short-Term Memory baseline (anchor + recipe) 0.081 and the memory-removed
+# Chain-Mamba (exp04) 0.0476. A reviewer can ask whether the Long Short-Term Memory network is simply a weak
+# choice of recurrent baseline. The gated recurrent unit is the other standard recurrent network used in
+# learned model predictive control, so it is added as a second fair baseline.
+#
+# Kept in its own file so that exp03b's arms, fixed before its run, stay unchanged.
+# The baseline arm is NOT retrained here: its result comes from exp03b (same machine, seed, data, recipe).
+# Run on the same machine as exp03b (home Ubuntu processor) so the numbers can be compared.
+# --------------------------------------------------------------------------------------------
+math_signal:
+  signal: INCONCLUSIVE
+  what_was_checked: >
+    The gated recurrent unit has the same kind of tanh-bounded memory as the Long Short-Term Memory network,
+    and with the anchor both only have to learn the same 22% of the velocity change (a06). No equation says
+    which of the two learns it better.
+  prediction: >
+    gru_anchor_recipe within 20% of the Long Short-Term Memory network's 0.081 (between 0.065 and 0.097),
+    and above the memory-removed Chain-Mamba's 0.0476.
+  assumptions: >
+    Same data, windows, recipe and evaluation code as exp03b; hidden size 29 (3,113 parameters with the
+    anchor) against 3,160 for the Long Short-Term Memory network.
+
+arms:
+  - name: gru_anchor_recipe
+    label: "Gated recurrent unit + anchor + new recipe"
+    model: ../models/gru.yaml
+    training_regime: chained
+    group: chained
+    role: baseline
+    overrides:
+      readout:
+        linear_skip: true
+        increment_normalisation: true
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: >
+      Second fair baseline. Exactly the read-out and recipe of lstm_anchor_recipe (exp03b) and of
+      Chain-Mamba; only the recurrent core differs.
+
+decision_rule:
+  type: proposed
+  metric: rollout_rmse               # root-mean-square error averaged over the 50 chained-prediction steps
+  threshold_percent: 20
+  one_step_tolerance_percent: 10

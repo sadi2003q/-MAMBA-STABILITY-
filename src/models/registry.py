@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from src.models.dynamics import DynamicsModel
 from src.models.lstm_dynamics import LSTMCore
+from src.models.gru_dynamics import GRUCore
 from src.models.mamba_block import MambaCore
 from src.models.mamba_chain import ChainMambaCore
 from src.models.ssm_minimal import MinimalSelectiveSSM
 
 # Published reference sizes for the Van der Pol example (Cevaal, de Jong and Lazar, 2026, Table 2).
-REFERENCE_PARAMETERS = {"mamba_full": 3418, "lstm": 3052, "ssm_minimal": None, "chain_mamba": 3418}
+REFERENCE_PARAMETERS = {"mamba_full": 3418, "lstm": 3052, "ssm_minimal": None, "chain_mamba": 3418,
+                        "gru": None}   # Cevaal et al. report no gated recurrent unit
 
 
 def build_core(model_cfg: dict, in_dim: int):
@@ -21,9 +23,11 @@ def build_core(model_cfg: dict, in_dim: int):
         return MambaCore(in_dim, **m)
     if name == "lstm":
         return LSTMCore(in_dim, **m)
+    if name == "gru":
+        return GRUCore(in_dim, **m)
     if name == "chain_mamba":
         return ChainMambaCore(in_dim, **m)
-    raise ValueError(f"Unknown model '{name}'. Known: ssm_minimal, mamba_full, lstm, chain_mamba.")
+    raise ValueError(f"Unknown model '{name}'. Known: ssm_minimal, mamba_full, lstm, gru, chain_mamba.")
 
 
 def build_model(cfg: dict, n_x: int = 2, n_u: int = 1) -> DynamicsModel:

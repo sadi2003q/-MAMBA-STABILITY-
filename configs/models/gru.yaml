@@ -1,0 +1,19 @@
+# Gated recurrent unit baseline, parameter-matched to the Long Short-Term Memory network (3,152) and
+# Cevaal et al.'s 3,052.
+#
+# Parameter count with input [x1, x2, u, mask] (4 numbers) and hidden size 29:
+#   gated recurrent unit: 3 gates x (4 x 29 input weights + 29 x 29 memory weights + 2 x 29 biases)
+#                       = 3 x (116 + 841 + 58) = 3,045
+#   read-out head:        29 x 2 weights + 2 biases = 60
+#   total                = 3,105   (+ 8 anchor weights when the anchor is switched on = 3,113)
+# Hidden size 30 would give 3,302, above the Long Short-Term Memory network, so 29 is the closest fair size.
+#
+# Learning rate 0.001, the same value the learning-rate check chose for the Long Short-Term Memory network
+# (lstm_final.yaml). Experiments that use the new training recipe override it to 0.002 anyway.
+
+model:
+  name: gru
+  hidden_size: 29
+
+training:
+  lr: 1.0e-03
