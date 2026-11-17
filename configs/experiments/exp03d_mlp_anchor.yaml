@@ -19,7 +19,7 @@ hypothesis: >
 # Kept in its own file so that exp03b and exp03c stay as they were fixed before their runs.
 # --------------------------------------------------------------------------------------------
 math_signal:
-  signal: INCONCLUSIVE (leaning: the multilayer perceptron is worse)
+  signal: "INCONCLUSIVE (leaning towards: the multilayer perceptron is worse)"
   what_was_checked: >
     (1) The Van der Pol step depends only on the current state and push, so the best chained predictor needs no
     memory: a memory-free network CAN be as good. (2) After the anchor, the network only has to learn the curved
