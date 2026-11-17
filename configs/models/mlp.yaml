@@ -1,0 +1,24 @@
+# Memory-free multilayer perceptron (src/models/mlp_dynamics.py): the change is computed from
+# [position, velocity, push, mask] of the current step only. Brought over from the chain-mamba branch, same sizes.
+#
+# Parameter count, Van der Pol (input of 4 numbers), hidden size 54, 2 layers:
+#   layer 1:        4 x 54 weights + 54 biases  =   270
+#   layer 2:       54 x 54 weights + 54 biases  = 2,970
+#   read-out head: 54 x 2 weights  +  2 biases  =   110
+#   anchor:         4 x 2 weights               =     8
+#   total                                         3,358   (Chain-Mamba 3,310; memory removed 3,286)
+#
+# Same read-out as Chain-Mamba: anchor + increment scaling switched on here.
+# Learning rate 0.001 as the other baselines; experiments with the new training recipe override it to 0.002.
+
+model:
+  name: mlp
+  hidden: 54
+  layers: 2
+
+readout:
+  linear_skip: true
+  increment_normalisation: true
+
+training:
+  lr: 1.0e-03

@@ -1,0 +1,66 @@
+name: exp03d_mlp_anchor
+inherit: [../base.yaml, ../systems/vanderpol.yaml]
+
+question: "Does a plain memory-free multilayer perceptron, with the same anchor and new training recipe, match our memory-removed Chain-Mamba?"
+hypothesis: >
+  A parameter-matched multilayer perceptron (no memory, plain SiLU layers) with the anchor and the new recipe has a
+  50-step chained-prediction error more than 20% above the memory-removed Chain-Mamba (exp04: 0.0476 on the home
+  Ubuntu processor, seed 0).
+
+# --------------------------------------------------------------------------------------------
+# Why this experiment exists (written 17 November 2026, before any result on main):
+#
+# The memory-removed Chain-Mamba has no memory either. Its remaining parts are two gated feed-forward layers
+# (SwiGLU: a product of two branches inside one step) plus normalisation and residual connections. A plain
+# multilayer perceptron with the same anchor and recipe separates "no memory is enough" from "the gated layers
+# matter". The archive run on the chain-mamba branch (older trainer code) gave 0.102 for this network; it is
+# rerun here on main's current code and on the same machine as exp03b, exp03c and exp04.
+#
+# Kept in its own file so that exp03b and exp03c stay as they were fixed before their runs.
+# --------------------------------------------------------------------------------------------
+math_signal:
+  signal: INCONCLUSIVE (leaning: the multilayer perceptron is worse)
+  what_was_checked: >
+    (1) The Van der Pol step depends only on the current state and push, so the best chained predictor needs no
+    memory: a memory-free network CAN be as good. (2) After the anchor, the network only has to learn the curved
+    term mu * dt * x1^2 * x2 (a06). A gated layer multiplies two branches, so a product of inputs is one step
+    away; a plain SiLU layer has to build the product from sums of smooth curves. (3) The archive run on older
+    code gave 0.102, more than twice 0.0476.
+  prediction: >
+    mlp_anchor_recipe 50-step error more than 20% above 0.0476 (above 0.057); near the standard recurrent
+    networks (0.076 to 0.081) or above them, as in the archive (0.102).
+  assumptions: >
+    Same data, windows, recipe and evaluation code as exp03b, exp03c and exp04; 3,358 parameters against 3,286
+    for the memory-removed Chain-Mamba; the archive number came from different trainer code.
+
+arms:
+  - name: mlp_anchor_recipe
+    label: "Multilayer perceptron + anchor"
+    model: ../models/mlp.yaml
+    training_regime: chained
+    group: chained
+    role: baseline
+    overrides:
+      readout:
+        linear_skip: true
+        increment_normalisation: true
+      training:
+        epochs: 80
+        batch_size: 128
+        lr: 2.0e-3
+        lr_schedule: cosine
+        warmup_epochs: 3
+        lr_final_fraction: 0.01
+        rollout_curriculum: {start: 5, epochs: 25}
+        teacher_aux_weight: 0.5
+        state_noise_std: 0.0
+        checkpoint_every: 5
+    why: >
+      Memory-free baseline. Exactly the read-out and recipe of the other fair baselines and of Chain-Mamba;
+      only the core differs (plain SiLU layers instead of gated feed-forward layers).
+
+decision_rule:
+  type: proposed
+  metric: rollout_rmse               # root-mean-square error averaged over the 50 chained-prediction steps
+  threshold_percent: 20
+  one_step_tolerance_percent: 10

@@ -62,3 +62,9 @@ Dated. Each experiment: verdict in 2–3 lines and whether the mathematical pred
 - Architecture alone (old recipe): 0.333 (−28%). Margin removed (recipe kept): **0.054**, 19% better than with the margin although its memory is slow again (largest decay 0.9986). **The mathematical prediction (a05: margin lowers chained error) did not hold**: once trained on chained predictions, the slow memory does no measurable harm. Consistent with Stage 1 (the plain certificate is non-binding).
 - Recipe alone on the unchanged full Mamba: 0.176 (−62% vs 0.465), memory still slow (largest decay 0.996–0.999), limit cycle 13.8% / 10.1% off. Chain-Mamba is 62% below it at the same size, so both the recipe and the architecture matter.
 - Seed 1 (recipe arms): Chain-Mamba 0.057, no margin 0.056, Long Short-Term Memory network 0.120. The direction holds on a second seed; margin vs no margin is about the same there.
+
+## 17 November 2026 — exp03b and exp03c, fair baselines with the anchor and the new recipe (seed 0, home Ubuntu processor; direction only)
+
+- 50-step chained error, all with the anchor and the new recipe: gated recurrent unit **0.0764** (next-step 0.0254, 2.9 min), Long Short-Term Memory network 0.081 (0.0305, 2.3 min), full Mamba 0.0793 (0.0244, 30.9 min). The three standard networks are within 6% of each other.
+- Against the strongest one (gated recurrent unit), from exp04 on the same machine: memory-removed Chain-Mamba 0.0476 (−38%, next-step −55%) → passes the 20% rule; Chain-Mamba with memory 0.0653 (−15%) → does not.
+- exp03c prediction (within 20% of 0.081, above 0.0476) **held**. Three separate runs, same code, data, seed and machine.

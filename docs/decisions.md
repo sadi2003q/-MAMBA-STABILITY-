@@ -100,3 +100,9 @@ Dated record of what was decided and why. Newest last.
 - **Why exp03c.** A reviewer can ask whether the Long Short-Term Memory network is a weak choice of recurrent baseline. The gated recurrent unit is the other standard recurrent network in learned model predictive control. New file `configs/experiments/exp03c_gru_anchor.yaml` (one arm, `gru_anchor_recipe`, same anchor and recipe as `lstm_anchor_recipe`), so exp03b's arms stay as fixed before its run.
 - **Model.** `src/models/gru_dynamics.py` (PyTorch `nn.GRU`), `configs/models/gru.yaml`: hidden size 29 → 3,105 parameters (+8 anchor weights = 3,113), the closest size not above the Long Short-Term Memory network's 3,152 (hidden size 30 would give 3,302).
 - **Rule and prediction** (in the config): within 20% of 0.081, and above the memory-removed Chain-Mamba's 0.0476. Run on the home Ubuntu processor, like exp03b, so the numbers can be compared.
+
+## 17 November 2026 — exp03d: memory-free multilayer perceptron with the anchor brought to main (fixed before any result on main)
+
+- **Why.** The memory-removed Chain-Mamba has no memory; what is left are two gated feed-forward layers. A plain multilayer perceptron with the same anchor and recipe separates "no memory is enough" from "the gated layers matter". It existed only on the old `chain-mamba` branch (89 files behind main, older trainer; archive result 0.102), so it is brought over rather than run from that branch.
+- **Model.** `src/models/mlp_dynamics.py` (same layers and sizes as the branch, rewritten one step per line), `configs/models/mlp.yaml`: hidden 54, 2 SiLU layers, anchor on → 3,358 parameters (memory removed 3,286).
+- **Experiment** `configs/experiments/exp03d_mlp_anchor.yaml`, one arm `mlp_anchor_recipe`, same anchor and recipe as exp03b / exp03c. Prediction: more than 20% above 0.0476 (above 0.057). Run on the home Ubuntu processor.

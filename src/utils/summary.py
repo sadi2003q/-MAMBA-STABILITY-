@@ -43,6 +43,8 @@ def arm_label(arm: dict, row: dict) -> str:
         return "Long Short-Term Memory network"
     if row["model"] == "gru":
         return "Gated recurrent unit"
+    if row["model"] == "mlp":
+        return "Multilayer perceptron"
     base = DECAY_LABELS.get(row.get("decay_mode", ""), arm["name"])
     if row["model"] == "mamba_full":
         base += " (full Mamba)"
