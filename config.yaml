@@ -1,0 +1,21 @@
+system:
+  mu: 1.0
+  dt: 0.1
+
+# -----------------  Data  -----------------
+multisine:
+  slowest_frequency: 0.0049    # hertz
+  fastest_frequency: 4.88      # hertz
+  number_of_waves: 30
+  peak_push: 15.0
+
+start_state:
+  low: [-2.5, -2.0]            # [position, velocity]
+  high: [2.5, 2.0]
+
+steps:
+  train: 40000
+  validation: 10000
+  test: 10000
+
+data_seed: 12345
