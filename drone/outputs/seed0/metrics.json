@@ -1,0 +1,158 @@
+{
+  "summary": {
+    "pid": {
+      "crashes": 2,
+      "median_before_cm": 1.7975692890778685,
+      "median_after_cm": 3.9957033781172115,
+      "median_largest_after_cm": 11.106180782011926,
+      "median_after_all_flights_cm": 4.067962515806276,
+      "planning_ms": 0.0
+    },
+    "physics": {
+      "crashes": 0,
+      "median_before_cm": 3.8122519097449814,
+      "median_after_cm": 10.937742445426489,
+      "median_largest_after_cm": 12.648679253366312,
+      "median_after_all_flights_cm": 10.937742445426489,
+      "planning_ms": 6.307096000000456
+    },
+    "physics_corrected": {
+      "crashes": 0,
+      "median_before_cm": 2.6626525528101728,
+      "median_after_cm": 3.403646467878027,
+      "median_largest_after_cm": 6.726529434686007,
+      "median_after_all_flights_cm": 3.403646467878027,
+      "planning_ms": 6.462534999911895
+    },
+    "plain_corrected": {
+      "crashes": 0,
+      "median_before_cm": 2.012576107603913,
+      "median_after_cm": 2.3990933788421174,
+      "median_largest_after_cm": 5.399034577129015,
+      "median_after_all_flights_cm": 2.3990933788421174,
+      "planning_ms": 4.973952999762332
+    },
+    "one_step_corrected": {
+      "crashes": 0,
+      "median_before_cm": 1.9593375794618273,
+      "median_after_cm": 2.6888509676838677,
+      "median_largest_after_cm": 5.233826167794213,
+      "median_after_all_flights_cm": 2.6888509676838677,
+      "planning_ms": 80.21614349968331
+    },
+    "chained": {
+      "crashes": 0,
+      "median_before_cm": 0.9312215920696806,
+      "median_after_cm": 12.641825469153718,
+      "median_largest_after_cm": 14.326931275159104,
+      "median_after_all_flights_cm": 12.641825469153718,
+      "planning_ms": 9.670888250184362
+    },
+    "chained_corrected": {
+      "crashes": 0,
+      "median_before_cm": 2.2632645707576846,
+      "median_after_cm": 3.7240276654998445,
+      "median_largest_after_cm": 7.56604682441579,
+      "median_after_all_flights_cm": 3.7240276654998445,
+      "planning_ms": 10.369039500005783
+    },
+    "oracle": {
+      "crashes": 0,
+      "median_before_cm": 0.8667974881710758,
+      "median_after_cm": 0.8449432724287078,
+      "median_largest_after_cm": 2.303944467844983,
+      "median_after_all_flights_cm": 0.8449432724287078,
+      "planning_ms": 30.933055749983396
+    },
+    "physics_slow": {
+      "crashes": 0,
+      "median_before_cm": 1.910353791499829,
+      "median_after_cm": 3.629427774482302,
+      "median_largest_after_cm": 6.734409778642695,
+      "median_after_all_flights_cm": 3.629427774482302,
+      "planning_ms": 6.2185074998524215
+    },
+    "plain_slow": {
+      "crashes": 0,
+      "median_before_cm": 1.4852660629472259,
+      "median_after_cm": 2.1940627849634566,
+      "median_largest_after_cm": 6.117158364257955,
+      "median_after_all_flights_cm": 2.1940627849634566,
+      "planning_ms": 5.021359499778555
+    },
+    "one_step_slow": {
+      "crashes": 0,
+      "median_before_cm": 1.4230525519900747,
+      "median_after_cm": 2.893660427644281,
+      "median_largest_after_cm": 6.5863069435057735,
+      "median_after_all_flights_cm": 2.893660427644281,
+      "planning_ms": 80.27280649980639
+    },
+    "chained_slow": {
+      "crashes": 0,
+      "median_before_cm": 0.8400625270023869,
+      "median_after_cm": 3.202927172497812,
+      "median_largest_after_cm": 7.05661929859851,
+      "median_after_all_flights_cm": 3.202927172497812,
+      "planning_ms": 9.445345499898394
+    },
+    "one_step_none": {
+      "crashes": 0,
+      "median_before_cm": 1.6606630796165516,
+      "median_after_cm": 11.02270334971929,
+      "median_largest_after_cm": 12.476329648740322,
+      "median_after_all_flights_cm": 11.02270334971929,
+      "planning_ms": 79.00787799962927
+    },
+    "plain_none": {
+      "crashes": 0,
+      "median_before_cm": 2.0222799141259005,
+      "median_after_cm": 11.129545675602614,
+      "median_largest_after_cm": 12.71397981685146,
+      "median_after_all_flights_cm": 11.129545675602614,
+      "planning_ms": 4.532778000111648
+    }
+  },
+  "decision": {
+    "H1": {
+      "best_baseline": "plain_corrected",
+      "method_median_cm": 3.7240276654998445,
+      "best_baseline_median_cm": 2.3990933788421174,
+      "improvement_percent": -55.226457558612616,
+      "wilcoxon_p": 1.0,
+      "zero_crashes": true,
+      "planning_ms": 10.369039500005783,
+      "pass": false
+    },
+    "H2_recipe": {
+      "against": "one_step_corrected",
+      "improvement_percent": -38.49884989005774,
+      "wilcoxon_p": 0.9999933242797852,
+      "pass": false
+    },
+    "H3_correction": {
+      "against": "chained",
+      "improvement_percent": 70.54201013463965,
+      "wilcoxon_p": 9.5367431640625e-07,
+      "pass": true
+    },
+    "step_1b": {
+      "best_baseline": "plain_slow",
+      "method_median_cm": 3.202927172497812,
+      "best_baseline_median_cm": 2.1940627849634566,
+      "improvement_percent": -45.981564176211954,
+      "wilcoxon_p": 1.0,
+      "zero_crashes": true,
+      "planning_ms": 9.445345499898394,
+      "baselines_flown": [
+        "pid",
+        "physics",
+        "physics_slow",
+        "plain_slow",
+        "one_step_slow",
+        "chained"
+      ],
+      "pass": false
+    }
+  }
+}

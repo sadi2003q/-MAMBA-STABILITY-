@@ -1,0 +1,48 @@
+{
+  "physics (textbook equations)": {
+    "position_cm_step1": 0.46248521092437794,
+    "velocity_cm_s_step1": 2.479619021910431,
+    "position_cm_step10": 0.9296588703933764,
+    "velocity_cm_s_step10": 7.834988939657192,
+    "position_cm_step25": 3.6494489914838844,
+    "velocity_cm_s_step25": 13.247878935918658,
+    "position_cm_step50": 11.267830596922156,
+    "velocity_cm_s_step50": 21.15271712328198
+  },
+  "plain": {
+    "position_cm_step1": 0.46348833111532656,
+    "velocity_cm_s_step1": 2.439172962818591,
+    "position_cm_step10": 1.0438847716896515,
+    "velocity_cm_s_step10": 3.896452658893819,
+    "position_cm_step25": 2.4642418103601975,
+    "velocity_cm_s_step25": 6.111322068567919,
+    "position_cm_step50": 5.619378866722937,
+    "velocity_cm_s_step50": 11.249878796634441,
+    "parameters": 6284,
+    "training_minutes": 1.63553626537323
+  },
+  "one_step": {
+    "position_cm_step1": 0.46227391069509816,
+    "velocity_cm_s_step1": 2.340013298441726,
+    "position_cm_step10": 1.0426817543727338,
+    "velocity_cm_s_step10": 3.5326576576391453,
+    "position_cm_step25": 2.454205222604,
+    "velocity_cm_s_step25": 5.226661735995506,
+    "position_cm_step50": 4.998205463442483,
+    "velocity_cm_s_step50": 8.357105315623748,
+    "parameters": 8040,
+    "training_minutes": 17.784997491041818
+  },
+  "chained": {
+    "position_cm_step1": 0.45222428466409426,
+    "velocity_cm_s_step1": 2.4386686232087644,
+    "position_cm_step10": 0.569713695473808,
+    "velocity_cm_s_step10": 2.75150899284152,
+    "position_cm_step25": 1.1270650443375347,
+    "velocity_cm_s_step25": 3.30708679907126,
+    "position_cm_step50": 2.7116024538653383,
+    "velocity_cm_s_step50": 4.76245811397115,
+    "parameters": 8040,
+    "training_minutes": 29.301906502246858
+  }
+}
