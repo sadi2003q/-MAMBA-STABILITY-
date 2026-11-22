@@ -120,7 +120,7 @@ def train_space_model(cfg: dict, data: dict, version: str, seed: int, device, sa
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(training_cfg["grad_clip"]))
             optimizer.step()
-            epoch_losses.append(float(loss))
+            epoch_losses.append(float(loss.detach()))
 
         scheduler.step()
 

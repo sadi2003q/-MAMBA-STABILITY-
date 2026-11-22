@@ -625,5 +625,13 @@ Nothing in the certificate paper's code was changed.
     --quick no
 ```
 
-Results: `outputs/space01_quantum_hardware/summary.md`, `results.csv` (resumes after an interruption),
+```bash
+# circuit-usage test (minutes, no training; run after the real run has saved its predictors)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/check_space_circuit.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/space/space01_quantum_hardware.yaml \
+    --seed 0 \
+    --device cpu
+```
+
+Results: `outputs/space01_quantum_hardware/summary.md`, `circuit_usage.md`, `results.csv` (resumes after an interruption),
 `metrics.json`, `verdict.json`, trained predictors in `models/`, details in `log.txt`.
