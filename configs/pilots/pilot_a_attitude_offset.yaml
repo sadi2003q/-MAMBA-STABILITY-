@@ -1,0 +1,176 @@
+# SPACE PILOT A — satellite pointing without the steady pointing error (single seed: direction only)
+#
+# Problem from: Cena, Martini, Chiaberge (2026), "Hybrid Model Predictive Control with Physics-Informed Neural
+# Network for Satellite Attitude Control", arXiv 2602.15954. Their learned model alone left a steady pointing
+# error (0.2901 degrees median vs 0.0023 for their hybrid). Their hybrid switches to a linear model below
+# 1 degree, which they say gives "considerably higher torques than necessary"; their training data had no
+# reaction-wheel friction.
+#
+# Run:  python tools/run_pilot_attitude.py --config configs/pilots/pilot_a_attitude_offset.yaml --seed 0
+
+name: pilot_a_attitude_offset
+inherit: [../models/chain_mamba.yaml]
+
+question: >
+  Does your memory-removed chained predictor + the running correction (mpc01c) remove the steady pointing
+  error of learned-model control as well as Cena et al.'s switch to a linear model, and keep removing it when
+  the real wheels have friction that was not in the training data?
+
+hypothesis: >
+  (1) The problem is real: the learned controller without a correction ends with a steady pointing error at
+  least 5 times the true-equations controller's. (2) With the running correction it is no worse than the
+  hybrid switch without friction, and clearly better (at least 50% lower) with friction, with no satellite
+  lost and no slower settling.
+
+math_signal:
+  signal: POSITIVE
+  what_was_checked: >
+    analysis/p01_attitude_offset_fixed_point.py: one axis, small angles, exact unconstrained controller
+    (dt 0.5 s, 10 planned steps, the cost below). An unmodelled friction torque of 7e-5 N m (3.5% of the push
+    limit) leaves a steady pointing error of 0.191 degrees; with the running correction 0.000 degrees.
+    Fixed-point reason (as in mpc01c): at a steady state the measured mismatch is exactly the missing torque's
+    effect, so adding it to every predicted step cancels it. The hybrid's linear model has no friction either,
+    so it keeps the offset under friction.
+  prediction: >
+    no friction: learned_mpc has a steady offset (learned-model bias near the target); hybrid_switch and
+    learned_offset_free both remove it. with friction: linear_mpc, learned_mpc and hybrid_switch keep an offset
+    of about 0.1-0.3 degrees; learned_offset_free stays near the true-equations controller.
+  assumptions: >
+    linearisation near the target; unconstrained solver (the real one is Adam with a push limit); the
+    learned model's bias near the target is not modelled; single seed shows direction only.
+
+# ---------------------------------------------------------------------------------------------------------
+system:
+  name: cubesat_wheels
+  dt: 0.5                          # seconds between control decisions
+  substeps: 5                      # Runge-Kutta steps inside each control step (0.1 s each)
+  inertia: [0.05, 0.05, 0.02]      # body moment of inertia per axis (kilogram square metres), a small CubeSat
+  wheel_inertia: 2.0e-5            # each reaction wheel (kilogram square metres)
+  u_max: 2.0e-3                    # wheel motor torque limit per axis (newton metres)
+
+data:
+  train_trajectories: 600
+  val_trajectories: 100
+  test_trajectories: 100
+  trajectory_steps: 160            # 80 seconds each
+  context_len: 1                   # memory removed: one past step is enough (used for the running correction)
+  horizon: 20                      # chained-prediction steps in training (the controller plans 10)
+  window_stride: 5
+  start_angle_max: 90.0            # degrees
+  start_spin_max: 0.05             # radians per second, per axis
+  wheel_speed_low: 50.0            # radians per second (size of each wheel's starting speed)
+  wheel_speed_high: 350.0
+  gain_attitude_low: 2.0e-4        # weak pointing controller used to collect data (random gains)
+  gain_attitude_high: 3.0e-3
+  gain_spin_low: 5.0e-3
+  gain_spin_high: 4.0e-2
+  excitation_fraction: 0.6         # random extra pushes up to 60% of the push limit
+  data_seed: 2026
+
+# Your memory-removed chained predictor: exactly the exp04 chain_mamba_no_memory settings
+model:
+  mixer: false
+  ffn_hidden: 44
+
+# Your recipe (exp04), shortened from 80 to 40 epochs for this pilot (to disclose)
+training:
+  epochs: 40
+  batch_size: 128
+  lr: 2.0e-3
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  lr_decay_gamma: 0.97
+  weight_decay: 1.0e-5
+  rollout_curriculum: {start: 5, epochs: 15}
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  grad_clip: 1.0
+  clamp_state: 50.0
+
+controller:
+  horizon: 10                      # 5 seconds ahead
+  q_attitude: 50.0                 # on (4 sigma)^2, about the angle in radians squared
+  q_spin: 5.0
+  p_attitude: 100.0                # last planned step
+  p_spin: 10.0
+  r_input_change: 0.5              # on the change of the push, in units of the push limit
+  correction_filter: 0.5           # running correction: half old, half newest mismatch (as mpc01c)
+  switch_angle: 1.0                # hybrid switch: linear model below this pointing error (degrees), as Cena et al.
+
+solver:
+  iterations: 20                   # Adam rounds per control step
+  first_iterations: 50             # first plan of a run (no warm start)
+  learning_rate: 0.1               # in units of the push limit
+
+test:
+  starts: 32
+  start_seed: 7
+  start_angle_low: 20.0            # degrees away from the target at the start
+  start_angle_high: 60.0
+  start_spin_max: 0.01
+  wheel_speed_low: 100.0
+  wheel_speed_high: 300.0
+  steps: 160                       # 80 seconds
+  steady_fraction: 0.25            # "steady pointing error" = mean error over the last 25% (60-80 s)
+  settle_angle: 1.0                # degrees: settled = stays below this until the end
+  lost_control_spin: 0.5           # radians per second: faster than this = tumbling
+
+# The two conditions of the REAL satellite. Training data always has no friction.
+conditions:
+  - name: no_friction
+    viscous: 0.0
+    coulomb: 0.0
+  - name: wheel_friction           # about 7e-5 N m at 200 rad/s (3.5% of the push limit)
+    viscous: 2.0e-7                # N m per (rad/s)
+    coulomb: 3.0e-5                # N m
+
+# Controllers. Every one runs in both conditions on the same starting points.
+versions:
+  - name: true_equations_mpc
+    predictor: true_equations
+    offset_free: false
+    why: "best possible reference: knows the real physics, friction included"
+  - name: linear_mpc
+    predictor: linear
+    offset_free: false
+    why: "Cena et al.'s linear model alone (their Table III reference)"
+  - name: learned_mpc
+    predictor: learned
+    offset_free: false
+    why: "learned model alone: shows the problem (Cena et al.'s MLP-LD row)"
+  - name: hybrid_switch
+    predictor: hybrid
+    offset_free: false
+    why: "Cena et al.'s fix: learned model above 1 degree, linear model below"
+  - name: learned_offset_free
+    predictor: learned
+    offset_free: true
+    why: "the proposal: learned model + running correction, no switch"
+
+decision_rule:
+  proposal: learned_offset_free
+  competitor: hybrid_switch
+  problem_real:                     # learned_mpc vs true_equations_mpc, in at least one condition
+    steady_angle_times: 5.0
+    steady_angle_at_least_degrees: 0.02
+  go:                               # learned_offset_free vs hybrid_switch, medians over the starts
+    no_friction_steady_angle_at_most_times: 1.1
+    friction_steady_angle_at_most_times: 0.5
+    settle_time_at_most_times: 1.1
+    lost_control_allowed: 0
+
+quick:
+  data:
+    train_trajectories: 40
+    val_trajectories: 10
+    test_trajectories: 10
+    trajectory_steps: 40
+  training:
+    epochs: 2
+  test:
+    starts: 4
+    steps: 12
+  solver:
+    iterations: 3
+    first_iterations: 5

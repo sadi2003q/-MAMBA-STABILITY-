@@ -1,0 +1,180 @@
+# SPACE PILOT B — staying on a planned orbit near an irregular, spinning asteroid (single seed: direction only)
+#
+# Problem from: Cesarini and Silvestrini (Politecnico di Milano), "Transformer-based Neural Predictive Control
+# for Small-Body Proximity Operations" (venue and date not printed on the copy read; it cites 2026 data).
+# A large Transformer surrogate (embedding 512, 8 heads, 2048 hidden) inside model predictive control near
+# 433 Eros, trained on a low-fidelity model (density +10%, spin +1%, spin axis tilted 3 degrees). Limitations
+# they state: shown "in the vicinity of a reference orbit"; "future studies should extend the analysis to more
+# complex reference trajectories and a wider range of operational regimes".
+#
+# Run:  python tools/run_pilot_asteroid.py --config configs/pilots/pilot_b_asteroid_proximity.yaml --seed 0
+
+name: pilot_b_asteroid_proximity
+inherit: [../models/chain_mamba.yaml]
+
+question: >
+  Can your small memory-removed chained predictor (about 3,300 parameters), trained on a low-fidelity asteroid
+  model over a wide range of orbits, plus the running correction, keep a spacecraft on four DIFFERENT orbits
+  near the real (high-fidelity) asteroid as well as model predictive control that plans with the low-fidelity
+  physics model itself (the paper's standard controller)?
+
+hypothesis: >
+  (1) The problem is real: planning with the low-fidelity physics model gives at least 20% larger position
+  errors than planning with the true physics. (2) The learned predictor + running correction loses no
+  spacecraft and stays within 20% of the low-fidelity physics controller's position error on every orbit,
+  using no more than 20% more fuel.
+
+math_signal:
+  signal: POSITIVE that the problem is real and correctable; INCONCLUSIVE on the learned model
+  what_was_checked: >
+    analysis/p02_asteroid_model_mismatch.py: acceleration error of the low-fidelity model at 30-60 km is
+    1.9e-7 to 2.9e-7 km/s^2, mostly from the 3-degree spin-axis tilt (as the paper reports), which would drift
+    2.2-3.3 km over an 80-minute plan (1/2 a T^2) — far more than the paper's 13 m tracking errors, so model
+    error matters. It is only 12-17% of the largest acceleration the thrusters can make (0.5 m/s per
+    5 minutes), so a controller that knows the error can cancel it. The error changes slowly along an orbit
+    (it depends on position and velocity), so the running correction (a constant per plan) should remove most
+    but not all of it.
+  prediction: >
+    nominal_physics_mpc clearly worse than true_physics_mpc; both offset-free versions much better than their
+    plain versions; learned_offset_free close to nominal_physics_offset_free if the learned model's own fitting
+    error (unknown before training) is small compared with the low-fidelity model's error.
+  assumptions: >
+    mass-point gravity of an Eros-like shape instead of the paper's polyhedral Eros model; Adam solver instead
+    of IPOPT; single seed shows direction only.
+
+# ---------------------------------------------------------------------------------------------------------
+system:
+  name: small_body
+  gm: 4.463e-4                     # km^3/s^2, 433 Eros
+  spin_period_hours: 5.27          # 433 Eros
+  lobes:                           # Eros-like peanut shape: two overlapping ellipsoids (km)
+    - {center: [-7.0, 0.0, 0.0], semi_axes: [10.0, 6.0, 5.5]}
+    - {center: [8.0, 1.0, 0.0], semi_axes: [9.0, 5.0, 4.5]}
+  spacing_high: 1.5                # km between mass points: high fidelity (642 points) = the real asteroid
+  softening: 0.5                   # km, keeps the pull of one point finite
+  low_fidelity:                    # the model used for training data and for nominal_physics_mpc (the paper's errors)
+    spacing: 3.0                   # km (82 points)
+    density_factor: 1.10           # +10%
+    spin_factor: 1.01              # +1%
+    spin_tilt_degrees: 3.0
+  dt: 300.0                        # seconds between control decisions (5 minutes, the paper's scenario 1)
+  substeps: 4                      # Runge-Kutta steps inside each control step (75 s each)
+  dv_max: 5.0e-4                   # km/s per axis per step (0.5 m/s)
+
+data:
+  train_trajectories: 3000         # from the LOW-fidelity model (as the paper)
+  val_trajectories: 300
+  test_trajectories: 300
+  trajectory_steps: 40             # 200 minutes each
+  context_len: 1                   # memory removed: one past step is enough (used for the running correction)
+  horizon: 16                      # chained-prediction steps in training = the controller's plan (80 minutes)
+  window_stride: 3
+  radius_low: 25.0                 # km: starts spread over a WIDE shell (the paper stayed near one orbit)
+  radius_high: 70.0
+  speed_factor_low: 0.85           # x circular speed
+  speed_factor_high: 1.15
+  keep_radius_low: 18.0            # trajectories closer than this crashed -> thrown away
+  keep_radius_high: 100.0          # further than this escaped -> thrown away
+  kick_probability: 0.3            # each axis gets a random kick (up to dv_max) with this probability per step
+  data_seed: 2026
+
+# Your memory-removed chained predictor: exactly the exp04 chain_mamba_no_memory settings
+model:
+  mixer: false
+  ffn_hidden: 44
+
+# Your recipe (exp04), shortened from 80 to 40 epochs for this pilot (to disclose)
+training:
+  epochs: 40
+  batch_size: 128
+  lr: 2.0e-3
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  lr_decay_gamma: 0.97
+  weight_decay: 1.0e-5
+  rollout_curriculum: {start: 5, epochs: 15}
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  grad_clip: 1.0
+  clamp_state: 50.0
+
+controller:
+  horizon: 16                      # 80 minutes ahead (the paper: 16 steps)
+  position_scale: 0.1              # km: a 100 m position error counts as 1
+  velocity_scale: 1.0e-4           # km/s: a 0.1 m/s velocity error counts as 1
+  q_position: 1.0
+  q_velocity: 0.1
+  p_position: 10.0                 # last planned step
+  p_velocity: 1.0
+  r_fuel: 0.01                     # on each kick, in units of the push limit
+  correction_filter: 0.5           # running correction: half old, half newest mismatch (as mpc01c)
+
+solver:
+  iterations: 15                   # Adam rounds per control step
+  first_iterations: 40             # first plan of a run (no warm start)
+  learning_rate: 0.1               # in units of the push limit
+
+test:
+  start_seed: 11
+  starts_per_orbit: 8
+  steps: 144                       # 12 hours
+  start_position_offset: 0.2       # km, random starting offset from the reference (per axis)
+  start_velocity_offset: 5.0e-5    # km/s (0.05 m/s per axis)
+  crash_radius: 18.0               # km
+  lost_position_error: 5.0         # km from the reference = lost
+  orbits:                          # four different orbits (the paper showed one region)
+    - {name: equatorial_40km, radius: 40.0, inclination: 0.0, node: 0.0}
+    - {name: polar_45km, radius: 45.0, inclination: 90.0, node: 30.0}
+    - {name: inclined_close_32km, radius: 32.0, inclination: 45.0, node: 60.0}
+    - {name: retrograde_55km, radius: 55.0, inclination: 150.0, node: 120.0}
+
+versions:
+  - name: true_physics_mpc
+    predictor: true_physics
+    offset_free: false
+    why: "best possible reference: plans with the real asteroid"
+  - name: nominal_physics_mpc
+    predictor: low_fidelity_physics
+    offset_free: false
+    why: "the paper's standard controller: plans with the low-fidelity physics model"
+  - name: nominal_physics_offset_free
+    predictor: low_fidelity_physics
+    offset_free: true
+    why: "strong baseline: the same physics model + the running correction"
+  - name: learned_mpc
+    predictor: learned
+    offset_free: false
+    why: "your predictor alone"
+  - name: learned_offset_free
+    predictor: learned
+    offset_free: true
+    why: "the proposal: your predictor + the running correction"
+
+decision_rule:
+  proposal: learned_offset_free
+  competitor: nominal_physics_mpc
+  strong_baseline: nominal_physics_offset_free
+  problem_real:                    # nominal_physics_mpc vs true_physics_mpc, median over all starts
+    position_error_times: 1.2
+  go:                              # learned_offset_free vs nominal_physics_mpc, medians
+    position_error_at_most_times_every_orbit: 1.2
+    fuel_at_most_times: 1.2
+    lost_allowed: 0
+  strong:                          # extra line in the summary only (not part of GO)
+    position_error_at_most_times_strong_baseline: 1.1
+
+quick:
+  data:
+    train_trajectories: 60
+    val_trajectories: 20
+    test_trajectories: 20
+    trajectory_steps: 20
+  training:
+    epochs: 2
+  test:
+    starts_per_orbit: 1
+    steps: 6
+  solver:
+    iterations: 2
+    first_iterations: 3

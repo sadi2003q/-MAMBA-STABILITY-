@@ -595,3 +595,14 @@ machine (processor, to match the exp04 numbers). The stored Chain-Mamba with mem
 
 
 Results: `outputs/mpc01_stabilise/summary.md`, `results.csv`, `metrics.json`, `figures/`, details in `log.txt`.
+
+## 13. Space-engineering pilots A and B (22 November 2026)
+
+Two single-seed pilots that test the memory-removed chained predictor + recipe + running correction on open
+problems from 2026 space papers (satellite pointing; orbit keeping near an asteroid). Plan, decision rules and
+differences from the papers: `docs/space_pilots.md`.
+
+```bash
+# both pilots, one command (each ends with "Decision: GO" or "Decision: STOP")
+!bash /kaggle/working/-MAMBA-STABILITY-/scripts/run_space_pilots.sh
+```
