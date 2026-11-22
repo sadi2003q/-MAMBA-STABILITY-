@@ -181,7 +181,7 @@ decision_rule:
   problem_real:                     # quantum_no_fix in any defect condition vs itself on perfect hardware
     cost_rise_percent: 20
     at_rest_drop_points: 10
-    any_lost_control: true
+    more_lost_control_than_on_perfect_hardware: true   # changed after the quick code check (22 Nov), before any real result
   fix_works:                        # quantum_both_fixes in every condition vs the reference
     cost_above_reference_percent: 10
     at_rest_below_reference_points: 5

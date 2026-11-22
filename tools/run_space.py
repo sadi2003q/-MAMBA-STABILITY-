@@ -281,7 +281,7 @@ def write_verdict(cfg: dict, table: dict, check: dict, output_dir: Path, log, qu
         return
 
     # Small table: perfect hardware for every version, then the quantum versions in the combined condition
-    lines.append(f"{'':48s} {'At rest':>8s} {'Lost':>5s} {'Tracking cost':>14s} {'vs reference':>13s}")
+    lines.append(f"{'':62s} {'At rest':>8s} {'Lost':>5s} {'Tracking cost':>14s} {'vs reference':>13s}")
     for version in cfg["versions"]:
         for condition in ["perfect", "combined_realistic"]:
             entry = table.get((version["name"], condition))
@@ -289,7 +289,7 @@ def write_verdict(cfg: dict, table: dict, check: dict, output_dir: Path, log, qu
                 continue
             label = VERSION_LABELS.get(version["name"], version["name"]) + ("" if condition == "perfect" else ", combined defects")
             change = percent_change(entry["cost"], reference["cost"])
-            lines.append(f"  {label:46s} {entry['at_rest']:7.0f}% {entry['lost']:5d} {entry['cost']:14.1f} {change:+12.1f}%")
+            lines.append(f"  {label:60s} {entry['at_rest']:7.0f}% {entry['lost']:5d} {entry['cost']:14.1f} {change:+12.1f}%")
     lines.append("  (tracking cost: sum of squared pointing error in degrees over the run; smaller is better)")
     lines.append("")
 
@@ -304,7 +304,9 @@ def write_verdict(cfg: dict, table: dict, check: dict, output_dir: Path, log, qu
                 continue
             cost_rise = percent_change(entry["cost"], baseline["cost"])
             rest_drop = baseline["at_rest"] - entry["at_rest"]
-            is_hurt = (entry["lost"] > 0) or (rest_drop >= rule["problem_real"]["at_rest_drop_points"]) \
+            # loss of control counts only if it happens MORE often than on perfect hardware
+            extra_lost = entry["lost"] - baseline["lost"]
+            is_hurt = (extra_lost > 0) or (rest_drop >= rule["problem_real"]["at_rest_drop_points"]) \
                 or (cost_rise > rule["problem_real"]["cost_rise_percent"])
             if is_hurt:
                 hurt.append(condition)
