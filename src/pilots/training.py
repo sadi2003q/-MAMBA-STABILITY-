@@ -19,6 +19,7 @@ import torch
 
 from src.data.datasets import Normaliser
 from src.losses.regimes import regime_loss
+from src.models.physics_anchor import build_physics_anchored_model
 from src.models.registry import build_model, count_parameters
 from src.training.trainer import make_optimizer, rollout_options
 from src.utils.console import progress_bar
@@ -73,6 +74,25 @@ def increment_scale(states: torch.Tensor, norm: Normaliser) -> np.ndarray:
     return changes.reshape(-1, n_x).std(dim=0).numpy() + 1e-12
 
 
+@torch.no_grad()
+def remainder_scale(states: torch.Tensor, pushes: torch.Tensor, norm: Normaliser, step_function) -> np.ndarray:
+    """
+    Physics anchor only: typical size of what the cheap physics step gets WRONG (normalised units).
+        remainder = true next state - cheap_step(state, push)
+    """
+    n_x = states.shape[2]
+    x_std = torch.tensor(norm.x_std, dtype=torch.float32)
+
+    # Step 1: the cheap step from every state of every trajectory, with the push that was applied
+    current = states[:, :-1]
+    true_next = states[:, 1:]
+    cheap_next = step_function(current, pushes)
+
+    # Step 2: what it got wrong, in normalised units, and its standard deviation per state
+    remainder = (true_next - cheap_next) / x_std
+    return remainder.reshape(-1, n_x).std(dim=0).numpy() + 1e-12
+
+
 def build_windows(cfg: dict, train, val, test) -> dict:
     """
     train / val / test = (states, pushes) in physical units. Returns the windows, the normalisation numbers
@@ -93,10 +113,21 @@ def build_windows(cfg: dict, train, val, test) -> dict:
 # ==========================================================================================================
 # Training
 # ==========================================================================================================
-def build_predictor_model(cfg: dict, data: dict) -> torch.nn.Module:
-    """The model from the config (memory removed: model.mixer = false), with the increment scale attached."""
-    model = build_model(cfg, n_x=data["n_x"], n_u=data["n_u"])
-    model.set_increment_scale(data["increment_std"])
+def build_predictor_model(cfg: dict, data: dict, physics_step=None) -> torch.nn.Module:
+    """
+    The model from the config (memory removed: model.mixer = false), with the increment scale attached.
+    physics_step given -> the physics-anchored version (src/models/physics_anchor.py), whose network is scaled
+    by the size of the cheap step's remainder (data["remainder_std"]) instead of the full step change.
+    """
+    # Step 1: your model as before
+    if physics_step is None:
+        model = build_model(cfg, n_x=data["n_x"], n_u=data["n_u"])
+        model.set_increment_scale(data["increment_std"])
+        return model
+
+    # Step 2: the same model with the physics anchor
+    model = build_physics_anchored_model(cfg, data["n_x"], data["n_u"], physics_step, data["norm"])
+    model.set_increment_scale(data["remainder_std"])
     return model
 
 
@@ -119,11 +150,15 @@ def validation_loss(model, data: dict, cfg: dict, device, batch_size: int = 512)
     return total / max(1, count)
 
 
-def train_predictor(cfg: dict, data: dict, seed: int, device, save_path: Path, log, run_label: str):
-    """Train (or load, if already trained) one predictor. Returns the model in evaluation mode."""
+def train_predictor(cfg: dict, data: dict, seed: int, device, save_path: Path, log, run_label: str,
+                    physics_step=None):
+    """
+    Train (or load, if already trained) one predictor. Returns the model in evaluation mode.
+    physics_step given -> train the physics-anchored version.
+    """
     # Step 1: build the model with the seed fixed, so every run is repeatable
     set_seed(seed)
-    model = build_predictor_model(cfg, data).to(device)
+    model = build_predictor_model(cfg, data, physics_step).to(device)
 
     # Step 2: already trained earlier? load it and stop here
     if save_path.exists():

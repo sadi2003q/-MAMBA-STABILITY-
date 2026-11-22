@@ -136,3 +136,9 @@ Implication:         a margin can only help when the coupling c is large. exp03:
 ```
 
 Script: `analysis/a05_memory_margin_leak.py`.
+
+## 22 November 2026 — Space pilots: mathematical checks
+
+- **p01 (pilot A):** one axis, small angles, exact unconstrained controller (dt 0.5 s, 10 planned steps). Unmodelled friction 7e-5 N m (3.5% of the push limit) → steady pointing error 0.191°; with the running correction 0.000°. Fixed-point argument: at a steady state the measured mismatch equals the missing torque's effect exactly. Not tested in the pilot (solver floor 0.07° hid it).
+- **p02 (pilot B):** low-fidelity asteroid model error 1.9–2.9e-7 km/s² at 30–60 km, mostly the 3° spin-axis tilt; 80-minute drift 2.2–3.3 km; 12–17% of the thrusters' largest acceleration. Held: rough physics 6× worse than true physics in closed loop; correction cut it to 66 m.
+- **p03 (pilot B2):** what a cheap point-mass step (same total mass and spin vector, one Runge-Kutta step) gets wrong is 1.8 m / 0.012 m/s per 300 s step against a full change of 4,151 m / 1.52 m/s (2,262× and 124× smaller); 1 or 2 Runge-Kutta steps give the same remainder (it is the irregular shape). Prediction: the network's fitting error drops from 524 m to about 45 m or less.

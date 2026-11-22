@@ -1,0 +1,83 @@
+# SPACE PILOT B2 — physics anchor: close the gap to "rough physics + correction" (single seed: direction only)
+#
+# Follow-up of pilot B (seed 0, Kaggle T4): your predictor + running correction 103.5 m, rough (low-fidelity)
+# physics + correction 66.0 m, true physics 47.6 m; planning 918 ms against 3,872 ms. Added AFTER pilot B's
+# result (to disclose). Everything not written here is inherited unchanged from pilot B (same asteroid models,
+# data, recipe, controller weights, solver, test orbits and starting points).
+#
+# Run:  python tools/run_pilot_asteroid.py --config configs/pilots/pilot_b2_physics_anchor.yaml --seed 0
+#
+# Note: the decision_rule below is merged with pilot B's by the config loader; the B2 summary reads only the
+# keys written here (type, proposal, strong_baseline, no_network_control, old_predictor, go).
+
+name: pilot_b2_physics_anchor
+inherit: [pilot_b_asteroid_proximity.yaml]
+
+question: >
+  If a cheap point-mass physics step predicts most of each step and your network learns only what it gets wrong,
+  does the controller come within 10% of planning with the full rough physics model + correction, while planning
+  at least twice as fast?
+
+hypothesis: >
+  The physics-anchored predictor + running correction is within 10% of rough physics + correction (all orbits
+  together) and within 20% on every orbit, at least 20% better than both the cheap step alone + correction and
+  your current predictor + correction, with at most half the planning time and no spacecraft lost.
+
+math_signal:
+  signal: POSITIVE
+  what_was_checked: >
+    analysis/p03_physics_anchor_residual.py, 2,000 states like the training data (25-70 km, one 300 s step of the
+    low-fidelity model): full step change 4,151 m in position and 1.52 m/s in velocity (root-mean-square); what a
+    cheap point-mass step (same total mass and spin vector as the low-fidelity model, one Runge-Kutta step) gets
+    wrong: 1.8 m and 0.012 m/s, i.e. 2,262 times and 124 times smaller. One or two Runge-Kutta steps give the same
+    remainder, so the remainder is the irregular shape, not integration error. It is largest close in (25-35 km:
+    3.8 m, 25.6 mm/s) and smallest far out (50-70 km: 0.2 m, 1.5 mm/s).
+  prediction: >
+    If the network keeps a similar relative accuracy, its own fitting error (pilot B: 524 m after 16 steps against
+    the low-fidelity model) drops by about 100 times; even at 10 times worse relative accuracy it drops to about
+    45 m. Then anchored_offset_free should reach about 66-75 m (strong baseline 66 m), clearly below
+    learned_offset_free (about 104 m). cheap_physics_offset_free should sit between the strong baseline and the
+    old predictor (the point mass misses the shape the network learns). Planning time: the cheap step costs 4
+    small calculations per predicted step against 16 mass-point sums for the rough physics model.
+  assumptions: >
+    similar relative accuracy of the network on the smaller remainder (not guaranteed: the remainder is the
+    harder, shape-dependent part); errors add roughly as in pilot B; single seed shows direction only.
+
+anchor:
+  substeps: 1                      # Runge-Kutta steps of the cheap point-mass step per control step
+
+versions:
+  - name: nominal_physics_offset_free
+    predictor: low_fidelity_physics
+    offset_free: true
+    why: "the strong baseline: full rough physics model (82 mass points) + the running correction"
+  - name: cheap_physics_offset_free
+    predictor: cheap_physics
+    offset_free: true
+    why: "control without a network: the cheap point-mass step alone + correction (does the network add value?)"
+  - name: learned_offset_free
+    predictor: learned
+    offset_free: true
+    why: "your current predictor + correction (pilot B: 103.5 m)"
+  - name: anchored_mpc
+    predictor: anchored
+    offset_free: false
+    why: "physics-anchored predictor alone (how much the correction still adds)"
+  - name: anchored_offset_free
+    predictor: anchored
+    offset_free: true
+    why: "the proposal: physics-anchored predictor + correction"
+
+decision_rule:
+  type: physics_anchor
+  proposal: anchored_offset_free
+  strong_baseline: nominal_physics_offset_free
+  no_network_control: cheap_physics_offset_free
+  old_predictor: learned_offset_free
+  go:
+    overall_at_most_times_strong_baseline: 1.1
+    every_orbit_at_most_times_strong_baseline: 1.2
+    lower_than_no_network_control_percent: 20
+    lower_than_old_predictor_percent: 20
+    planning_time_at_most_times_strong_baseline: 0.5
+    lost_allowed: 0

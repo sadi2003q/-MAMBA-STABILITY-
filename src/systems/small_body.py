@@ -221,3 +221,64 @@ def reference_orbit(radius: float, inclination_degrees: float, node_degrees: flo
         vy = vy - spin_rate * px
         states.append([px, py, pz, vx, vy, vz])
     return torch.tensor(states, dtype=torch.float32)
+
+
+# ==========================================================================================================
+# The cheap physics step used by the physics anchor (pilot B2)
+# ==========================================================================================================
+class PointMassStep:
+    """
+    A CHEAP physics step: the asteroid as ONE point mass + the spinning frame's Coriolis and centrifugal terms,
+    one Runge-Kutta step per control step. It uses only what the low-fidelity model knows (its total mass and
+    its spin vector), never the real asteroid. No mass-point sum, so its cost does not depend on how detailed
+    the gravity model is.
+
+    Mathematical check (analysis/p03_physics_anchor_residual.py): on states like the training data, what this
+    step gets wrong is 2,262 times smaller in position and 124 times smaller in velocity than the full step
+    change, so the network only has to learn a small remainder (the irregular shape).
+    """
+
+    def __init__(self, gm: float, spin_vector, dt: float, substeps: int, dv_max: float):
+        self.gm = float(gm)
+        self.spin_vector = [float(value) for value in spin_vector]
+        self.dt = float(dt)
+        self.substeps = int(substeps)
+        self.u_max = float(dv_max)
+
+    @classmethod
+    def from_low_fidelity(cls, low_body: SmallBody, substeps: int) -> "PointMassStep":
+        """The same total mass and spin vector as the low-fidelity model (what the planner is allowed to know)."""
+        return cls(gm=low_body.gm, spin_vector=low_body.spin_vector, dt=low_body.dt, substeps=substeps,
+                   dv_max=low_body.u_max)
+
+    def derivative(self, state: torch.Tensor) -> torch.Tensor:
+        # Step 1: split the state
+        position = state[..., 0:3]
+        velocity = state[..., 3:6]
+
+        # Step 2: point-mass gravity  -GM r / |r|^3
+        squared = (position * position).sum(dim=-1, keepdim=True)
+        distance_cubed = torch.clamp(squared, min=1e-6) ** 1.5
+        gravity = -self.gm * position / distance_cubed
+
+        # Step 3: Coriolis and centrifugal terms of the spinning frame
+        spin = torch.tensor(self.spin_vector, dtype=state.dtype, device=state.device)
+        spin = spin.expand_as(position)
+        coriolis = -2.0 * torch.cross(spin, velocity, dim=-1)
+        centrifugal = -torch.cross(spin, torch.cross(spin, position, dim=-1), dim=-1)
+        return torch.cat([velocity, gravity + coriolis + centrifugal], dim=-1)
+
+    def step(self, state: torch.Tensor, push: torch.Tensor) -> torch.Tensor:
+        """Kick the velocity by `push` (clipped), then coast for dt. Works for any leading shape [..., 6]."""
+        push = torch.clamp(push, -self.u_max, self.u_max)
+        position = state[..., 0:3]
+        velocity = state[..., 3:6] + push
+        state = torch.cat([position, velocity], dim=-1)
+        small = self.dt / self.substeps
+        for _ in range(self.substeps):
+            k1 = self.derivative(state)
+            k2 = self.derivative(state + 0.5 * small * k1)
+            k3 = self.derivative(state + 0.5 * small * k2)
+            k4 = self.derivative(state + small * k3)
+            state = state + (small / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        return state

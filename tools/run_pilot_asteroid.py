@@ -41,8 +41,8 @@ from src.pilots.mpc import PilotMPC  # noqa: E402
 from src.pilots.predictors import LearnedPredictor, PhysicsPredictor  # noqa: E402
 from src.pilots.report import (append_row, chained_prediction_errors, change_words, fmt, median,  # noqa: E402
                                ratio, read_rows)
-from src.pilots.training import build_windows, train_predictor  # noqa: E402
-from src.systems.small_body import SmallBody  # noqa: E402
+from src.pilots.training import build_windows, remainder_scale, train_predictor  # noqa: E402
+from src.systems.small_body import PointMassStep, SmallBody  # noqa: E402
 from src.utils.cli import add_yes_no  # noqa: E402
 from src.utils.config import REPO_ROOT, deep_merge, load_yaml_with_inherit  # noqa: E402
 from src.utils.console import ConsoleLog, progress_bar  # noqa: E402
@@ -58,6 +58,9 @@ LABELS = {
     "nominal_physics_offset_free": "Low-fidelity physics + correction",
     "learned_mpc": "Learned model only",
     "learned_offset_free": "Learned + running correction",
+    "cheap_physics_offset_free": "Cheap point-mass step + correction",
+    "anchored_mpc": "Physics-anchored only",
+    "anchored_offset_free": "Physics-anchored + correction",
 }
 
 
@@ -123,29 +126,53 @@ def main():
     data = build_windows(cfg, train, val, test)
     log.say(f"Training windows: {data['train_x'].shape[0]:,} from {train[0].shape[0]:,} low-fidelity trajectories")
 
-    # ------------------------------------------------------------------ Step 3: your predictor
-    model_path = output_dir / "models" / f"learned_seed{seed}.pt"
-    model = train_predictor(cfg, data, seed, device, model_path, log, f"train memory-removed predictor seed{seed}")
+    # ------------------------------------------------------------------ Step 3: your predictor(s)
+    needed = set()
+    for version in cfg["versions"]:
+        needed.add(version["predictor"])
+    anchor_substeps = int(cfg.get("anchor", {}).get("substeps", 1))
+    cheap = PointMassStep.from_low_fidelity(low_body, anchor_substeps)
+
+    model = None
+    if "learned" in needed:
+        model_path = output_dir / "models" / f"learned_seed{seed}.pt"
+        model = train_predictor(cfg, data, seed, device, model_path, log, f"train memory-removed predictor seed{seed}")
+
+    anchored_model = None
+    if "anchored" in needed:
+        data["remainder_std"] = remainder_scale(train[0], train[1], data["norm"], cheap.step)
+        shrink = data["increment_std"] / data["remainder_std"]
+        log.say(f"Cheap step's remainder is {shrink[0:3].min():.0f}-{shrink[0:3].max():.0f}x smaller (position) and "
+                f"{shrink[3:6].min():.0f}-{shrink[3:6].max():.0f}x smaller (velocity) than the full step change")
+        anchored_path = output_dir / "models" / f"anchored_seed{seed}.pt"
+        anchored_model = train_predictor(cfg, data, seed, device, anchored_path, log,
+                                         f"train physics-anchored predictor seed{seed}", physics_step=cheap.step)
 
     # ------------------------------------------------------------------ Step 4: predictor check vs the REAL asteroid
     horizon = int(cfg["controller"]["horizon"])
     log.say("")
     log.say(f"Predictor check (position error of a chained prediction vs the REAL asteroid, metres, smaller is better):")
-    predictors_to_check = [
-        ("learned", LearnedPredictor(model, data["norm"], device)),
-        ("low-fidelity physics", PhysicsPredictor(low_body.step)),
-    ]
+    predictors_to_check = []
+    if model is not None:
+        predictors_to_check.append(("learned", LearnedPredictor(model, data["norm"], device)))
+    if anchored_model is not None:
+        predictors_to_check.append(("anchored", LearnedPredictor(anchored_model, data["norm"], device)))
+    predictors_to_check.append(("cheap point-mass step", PhysicsPredictor(cheap.step)))
+    predictors_to_check.append(("low-fidelity physics", PhysicsPredictor(low_body.step)))
     check = {}
     for label, predictor in predictors_to_check:
         errors = chained_prediction_errors(predictor, real_test[0], real_test[1], horizon, 8, position_difference_m,
                                            device)
         check[label] = errors
         log.say(f"  {label:22s} after 1 step {errors[0]:8.1f} | after {horizon} steps {errors[-1]:8.1f}")
-    learned_self = chained_prediction_errors(LearnedPredictor(model, data["norm"], device), test[0], test[1], horizon, 8,
-                                             position_difference_m, device)
-    check["learned_vs_low_fidelity"] = learned_self
-    log.say(f"  learned vs the low-fidelity model it was trained on: after {horizon} steps {learned_self[-1]:.1f} m "
-            f"(its own fitting error)")
+    # each network's own fitting error: compared with the low-fidelity model it was trained on
+    for label, predictor in predictors_to_check:
+        if label not in ("learned", "anchored"):
+            continue
+        own = chained_prediction_errors(predictor, test[0], test[1], horizon, 8, position_difference_m, device)
+        check[f"{label}_vs_low_fidelity"] = own
+        log.say(f"  {label} vs the low-fidelity model it was trained on: after {horizon} steps {own[-1]:.1f} m "
+                f"(its own fitting error)")
 
     # ------------------------------------------------------------------ Step 5: closed-loop runs
     results_path = output_dir / "results.csv"
@@ -179,6 +206,10 @@ def main():
             predictor = PhysicsPredictor(real_body.step)
         elif kind == "low_fidelity_physics":
             predictor = PhysicsPredictor(low_body.step)
+        elif kind == "cheap_physics":
+            predictor = PhysicsPredictor(cheap.step)
+        elif kind == "anchored":
+            predictor = LearnedPredictor(anchored_model, data["norm"], device)
         else:
             predictor = LearnedPredictor(model, data["norm"], device)
         controller = PilotMPC(predictor, cost_function, horizon, 3, real_body.u_max, cfg["solver"],
@@ -221,7 +252,10 @@ def main():
     for row in read_rows(results_path):
         if int(row["seed"]) == seed:
             rows[(row["version"], row["orbit"])] = row
-    write_summary(cfg, rows, all_metrics, check, seed, args.quick, orbit_list, output_dir, log)
+    if cfg["decision_rule"].get("type") == "physics_anchor":
+        write_summary_anchor(cfg, rows, all_metrics, check, seed, args.quick, orbit_list, output_dir, log)
+    else:
+        write_summary(cfg, rows, all_metrics, check, seed, args.quick, orbit_list, output_dir, log)
     save_json({"predictor_check_metres": check}, output_dir / "predictor_check.json")
     log.close()
 
@@ -335,6 +369,119 @@ def write_summary(cfg, rows, all_metrics, check, seed, quick, orbit_list, output
                  f"learned {fmt(check['learned'][-1], 1)}, low-fidelity physics {fmt(check['low-fidelity physics'][-1], 1)}; "
                  f"learned vs its own training model {fmt(check['learned_vs_low_fidelity'][-1], 1)}")
     lines.append("Planning times here are NOT comparable with the paper's 3.58 s (different gravity model and computer).")
+    text = "\n".join(lines)
+    (output_dir / "summary.md").write_text(text + "\n")
+    log.say("")
+    for line in lines:
+        log.say(line)
+
+
+def write_summary_anchor(cfg, rows, all_metrics, check, seed, quick, orbit_list, output_dir, log):
+    """Summary and decision for pilot B2 (physics anchor)."""
+    rule = cfg["decision_rule"]
+    proposal = rule["proposal"]
+    strong_baseline = rule["strong_baseline"]
+    no_network = rule["no_network_control"]
+    old_predictor = rule["old_predictor"]
+    versions = [version["name"] for version in cfg["versions"]]
+    lines = []
+    lines.append(f"RESULT — {cfg['name']}   (1 seed: direction only)")
+    if quick:
+        lines.append("QUICK MODE: code check only — do not interpret")
+    lines.append("")
+    lines.append("Question: if a cheap point-mass physics step predicts most of each step and your network learns")
+    lines.append("only the rest, does it close the gap to planning with the full rough physics model + correction,")
+    lines.append("while planning much faster?")
+    lines.append("")
+
+    # Step 1: tables
+    header = "                                     " + "".join(f"{orbit[:16]:>18s}" for orbit in orbit_list)
+    lines.append("Position error from the planned orbit (metres, median per orbit; smaller is better)")
+    lines.append(header)
+    for version in versions:
+        values = []
+        for orbit in orbit_list:
+            if (version, orbit) in rows:
+                values.append(f"{float(rows[(version, orbit)]['position_error_median_m']):18.1f}")
+            else:
+                values.append(f"{'-':>18s}")
+        lines.append(f"  {LABELS.get(version, version):35s}" + "".join(values))
+    lines.append("")
+    lines.append("                                     All orbits (m)   Fuel (m/s)   Lost   Planning per step (ms)")
+    for version in versions:
+        error = pooled(all_metrics, version, seed, "mean_position_error_m")
+        if error is None:
+            continue
+        fuel = pooled(all_metrics, version, seed, "fuel_m_per_s")
+        lost = sum(1 for value in all_metrics[f"{version}|seed{seed}"]["lost"] if value)
+        planning = float(rows[(version, orbit_list[0])]["planning_ms_mean"])
+        lines.append(f"  {LABELS.get(version, version):35s} {error:10.1f}   {fuel:10.2f}   {lost:4d}   {planning:12.0f}")
+    lines.append("")
+
+    # Step 2: the decision rule
+    missing = [version for version in versions if pooled(all_metrics, version, seed, "fuel_m_per_s") is None]
+    if missing:
+        lines.append(f"Decision: NOT READY (runs missing: {', '.join(missing)})")
+    else:
+        go = rule["go"]
+        p_all = pooled(all_metrics, proposal, seed, "mean_position_error_m")
+        s_all = pooled(all_metrics, strong_baseline, seed, "mean_position_error_m")
+        n_all = pooled(all_metrics, no_network, seed, "mean_position_error_m")
+        o_all = pooled(all_metrics, old_predictor, seed, "mean_position_error_m")
+        overall_ok = ratio(p_all, s_all) <= float(go["overall_at_most_times_strong_baseline"])
+        every_orbit_ok = True
+        orbit_words = []
+        for orbit in orbit_list:
+            p = float(rows[(proposal, orbit)]["position_error_median_m"])
+            s = float(rows[(strong_baseline, orbit)]["position_error_median_m"])
+            orbit_words.append(f"{orbit}: {change_words(p, s)}")
+            if ratio(p, s) > float(go["every_orbit_at_most_times_strong_baseline"]):
+                every_orbit_ok = False
+        beats_no_network = ratio(p_all, n_all) <= 1.0 - float(go["lower_than_no_network_control_percent"]) / 100.0
+        beats_old = ratio(p_all, o_all) <= 1.0 - float(go["lower_than_old_predictor_percent"]) / 100.0
+        p_time = float(rows[(proposal, orbit_list[0])]["planning_ms_mean"])
+        s_time = float(rows[(strong_baseline, orbit_list[0])]["planning_ms_mean"])
+        time_ok = ratio(p_time, s_time) <= float(go["planning_time_at_most_times_strong_baseline"])
+        lost = sum(1 for value in all_metrics[f"{proposal}|seed{seed}"]["lost"] if value)
+        lost_ok = lost <= int(go["lost_allowed"])
+
+        lines.append("What this means:")
+        lines.append(f"  • Physics-anchored + correction vs rough physics + correction: {change_words(p_all, s_all)}")
+        for words in orbit_words:
+            lines.append(f"      {words}")
+        lines.append(f"  • vs the cheap step alone + correction (no network): {change_words(p_all, n_all)}")
+        lines.append(f"  • vs your current predictor + correction: {change_words(p_all, o_all)}")
+        lines.append(f"  • Planning time vs rough physics + correction: {change_words(p_time, s_time)}")
+        lines.append("")
+        lines.append("Math predicted: the network's own fitting error drops from 524 m to about 45 m or less, which")
+        lines.append("brings the controller to about 66-75 m (rough physics + correction: 66 m in pilot B).")
+        own = check.get("anchored_vs_low_fidelity")
+        held = own is not None and own[-1] <= 100.0 and overall_ok
+        lines.append(f"Result {'agreed with' if held else 'did NOT agree with'} the prediction "
+                     f"(own fitting error after {len(own) if own else 0} steps: {fmt(own[-1], 1) if own else '-'} m).")
+        lines.append("")
+        checks = [
+            (f"all orbits: at most {go['overall_at_most_times_strong_baseline']}x the strong baseline", overall_ok),
+            (f"every orbit: at most {go['every_orbit_at_most_times_strong_baseline']}x the strong baseline", every_orbit_ok),
+            (f"at least {go['lower_than_no_network_control_percent']}% below the cheap step alone (the network adds value)",
+             beats_no_network),
+            (f"at least {go['lower_than_old_predictor_percent']}% below your current predictor", beats_old),
+            (f"planning time at most {go['planning_time_at_most_times_strong_baseline']}x the strong baseline", time_ok),
+            ("no spacecraft lost", lost_ok),
+        ]
+        for text, ok in checks:
+            lines.append(f"  [{'pass' if ok else 'FAIL'}] {text}")
+        verdict = all(ok for _, ok in checks)
+        lines.append("")
+        lines.append(f"Decision: {'GO — worth confirming with more seeds' if verdict else 'STOP — not worth continuing as designed'}")
+
+    lines.append("")
+    parts = []
+    for label in ["anchored", "learned", "cheap point-mass step", "low-fidelity physics"]:
+        if label in check:
+            parts.append(f"{label} {fmt(check[label][-1], 1)}")
+    lines.append(f"Predictor check vs the real asteroid after {cfg['controller']['horizon']} chained steps (metres): "
+                 + ", ".join(parts))
     text = "\n".join(lines)
     (output_dir / "summary.md").write_text(text + "\n")
     log.say("")

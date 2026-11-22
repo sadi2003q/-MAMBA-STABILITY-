@@ -11,6 +11,7 @@
 #
 # Both pilots resume by default: if a session stops, run the same command again.
 # To run only one pilot:  bash scripts/run_space_pilots.sh A    or    bash scripts/run_space_pilots.sh B
+# Follow-up pilot B2 (physics anchor, added after pilot B's result):  bash scripts/run_space_pilots.sh B2
 
 # Stop at the first command that fails
 set -euo pipefail
@@ -22,6 +23,9 @@ WHICH="${1:-AB}"
 echo "=== Step 1 of 3: mathematical checks ==="
 python "$ROOT/analysis/p01_attitude_offset_fixed_point.py"
 python "$ROOT/analysis/p02_asteroid_model_mismatch.py"
+if [[ "$WHICH" == "B2" ]]; then
+    python "$ROOT/analysis/p03_physics_anchor_residual.py"
+fi
 
 if [[ "$WHICH" == *A* ]]; then
     echo "=== Step 2 of 3: pilot A (satellite pointing) ==="
@@ -33,7 +37,7 @@ if [[ "$WHICH" == *A* ]]; then
         --quick no
 fi
 
-if [[ "$WHICH" == *B* ]]; then
+if [[ "$WHICH" == "B" || "$WHICH" == "AB" ]]; then
     echo "=== Step 3 of 3: pilot B (asteroid proximity) ==="
     # the real-asteroid gravity (642 mass points) is the slow part: a graphics card helps if there is one
     python "$ROOT/tools/run_pilot_asteroid.py" \
@@ -43,9 +47,18 @@ if [[ "$WHICH" == *B* ]]; then
         --quick no
 fi
 
+if [[ "$WHICH" == "B2" ]]; then
+    echo "=== Pilot B2 (physics anchor) ==="
+    python "$ROOT/tools/run_pilot_asteroid.py" \
+        --config "$ROOT/configs/pilots/pilot_b2_physics_anchor.yaml" \
+        --seed 0 \
+        --device auto \
+        --quick no
+fi
+
 echo ""
 echo "=== Verdicts ==="
-for NAME in pilot_a_attitude_offset pilot_b_asteroid_proximity; do
+for NAME in pilot_a_attitude_offset pilot_b_asteroid_proximity pilot_b2_physics_anchor; do
     SUMMARY="$ROOT/outputs/$NAME/summary.md"
     if [[ -f "$SUMMARY" ]]; then
         echo "$NAME: $(grep '^Decision:' "$SUMMARY" || echo 'no decision line')"
