@@ -1,0 +1,205 @@
+# SPACE PAPER, pilot 1 (separate from the certificate paper; reuses Chain-Mamba, the recipe and the
+# offset-free idea from mpc01c unchanged).
+#
+# A spacecraft must turn to point at a target and hold it, while its moment of inertia shrinks by 30% during
+# the run (fuel use). It is controlled by model predictive control that plans with Chain-Mamba (with memory,
+# warmed up on the last 10 measured steps so it can work out the current inertia). In the quantum versions,
+# Chain-Mamba's gate layer (x_proj) is a simulated 6-qubit circuit, and the circuit's outputs get realistic
+# hardware defects.
+#
+# Run:  python tools/run_space.py --config configs/space/space01_quantum_hardware.yaml --seed 0
+
+name: space01_quantum_hardware
+inherit: [../models/chain_mamba.yaml]
+
+question: >
+  When the quantum part of the spacecraft's predictor has realistic hardware defects, does the spacecraft lose
+  accuracy or control, and do practising with noise plus a running correction bring it back to the level of
+  the classical predictor on perfect hardware?
+
+hypothesis: >
+  (1) The problem is real: the quantum controller without fixes loses control or clearly loses accuracy
+  (more than 20% higher tracking cost, or 10 points fewer spacecraft at rest) in at least one hardware-defect
+  condition. (2) With both fixes it stays within 10% of the classical reference with the running correction,
+  never loses control, and has at most 5 points fewer spacecraft at rest, in every condition.
+
+math_signal:
+  signal: >
+    POSITIVE that instability is possible; POSITIVE that the correction removes steady offsets;
+    NEGATIVE that the correction alone prevents instability; INCONCLUSIVE overall
+  what_was_checked: >
+    (1) Single-axis, small-angle linearisation (sigma ~ angle / 4, dt = 0.5 s), with the controller approximated
+    by its infinite-horizon linear-quadratic regulator: the closed loop becomes UNSTABLE when the model believes
+    a push turns the spacecraft less than 0.557 times as much as it really does (spectral radius 1). Believing
+    pushes are stronger is safe up to at least 4 times. Script: analysis/s01_gain_margin.py.
+    (2) The 30% inertia shrink alone makes pushes 1.43 times stronger than at the start: a predictor that does
+    not adapt believes 0.70 of the truth (radius 0.561, stable). A further 20% under-estimate from hardware
+    errors (0.70 x 0.80 = 0.56) brings it to the edge (radius 0.989). So instability needs the COMBINATION of
+    mass change and hardware error, unless the memory works out the new inertia.
+    (3) Fixed-point argument (as in mpc01c): a constant model error at rest is cancelled exactly by the running
+    correction, so steady offsets from readout bias and slow drift should vanish. But the correction is
+    ADDITIVE: it cannot fix a wrong belief about how strongly a push acts (a gain error), so on its own it
+    should NOT prevent instability from (2). Practising with noise and the memory are the parts that can.
+  prediction: >
+    quantum_no_fix: at rest in most starts on perfect hardware; offsets under readout bias, drift and
+    sun/shadow switching; possible loss of control under severe gate errors. quantum_offset_free_only: offsets
+    removed, but any loss of control remains. quantum_both_fixes: inside the margin in most conditions; severe
+    gate errors are the most likely failure.
+  assumptions: >
+    linearisation near pointing at the target; the regulator approximates a 10-step predictive controller;
+    single seed shows direction only; every test condition lies inside the noise-aware training ranges (a
+    beyond-range test is still needed for the paper).
+
+# ---------------------------------------------------------------------------------------------------------
+system:
+  name: spacecraft
+  dt: 0.5                          # seconds between control decisions
+  substeps: 10                     # Runge-Kutta steps inside each control step
+  inertia_nominal: [1.0, 1.5, 0.8] # moment of inertia per axis at the start (kilogram square metres)
+  u_max: 0.1                       # reaction-wheel push limit per axis (newton metres)
+
+data:
+  train_trajectories: 600
+  val_trajectories: 100
+  test_trajectories: 100
+  trajectory_steps: 160            # 80 seconds each
+  context_len: 10                  # measured steps fed in before predicting (fills the memory)
+  horizon: 20                      # chained-prediction steps in training (the controller plans 10)
+  window_stride: 5
+  start_angle_max: 90.0            # degrees
+  start_spin_max: 0.05             # radians per second, per axis
+  inertia_factor_low: 0.75         # each trajectory's inertia = nominal x a random factor per axis
+  inertia_factor_high: 1.25
+  inertia_shrink_max: 0.35         # and shrinks by up to 35% over the trajectory
+  gain_attitude_low: 0.02          # weak pointing controller used to collect data (random gains)
+  gain_attitude_high: 0.3
+  gain_spin_low: 0.1
+  gain_spin_high: 0.8
+  excitation_fraction: 0.6         # random extra pushes up to 60% of the push limit
+  data_seed: 2026
+
+# Chain-Mamba sizes for 6 states and 3 pushes (inherits configs/models/chain_mamba.yaml, memory ON)
+model:
+  d_model: 24
+  dt_rank: 2
+  ffn_hidden: 40
+  mixer: true
+
+quantum:
+  qubits: 6
+  circuit_layers: 3
+
+# Your recipe (exp03 / exp04), shortened from 80 to 40 epochs for this pilot (to disclose)
+training:
+  epochs: 40
+  batch_size: 128
+  lr: 2.0e-3
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  lr_decay_gamma: 0.97
+  weight_decay: 1.0e-5
+  rollout_curriculum: {start: 5, epochs: 15}
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  grad_clip: 1.0
+  clamp_state: 50.0
+
+# Practising with noise: random defects for every training batch (quantum_noise_aware only)
+noise_aware_training:
+  shots_choices: [null, 1000, 100, 30, 10]
+  gate_error_max: 0.15
+  readout_a_max: 0.03
+  readout_b_max: 0.22
+
+controller:
+  horizon: 10                      # 5 seconds ahead
+  q_attitude: 50.0                 # on (4 sigma)^2, about the angle in radians squared
+  q_spin: 5.0
+  p_attitude: 100.0                # last planned step
+  p_spin: 10.0
+  r_input_change: 0.5              # on the change of the push, in units of the push limit
+  correction_filter: 0.5           # running correction: half old, half newest mismatch (as mpc01c)
+
+solver:
+  iterations: 15                   # Adam rounds per control step
+  first_iterations: 40             # first plan of a run (no warm start)
+  learning_rate: 0.1               # in units of the push limit
+
+test:
+  starts: 32
+  start_seed: 7
+  start_angle_low: 20.0            # degrees away from the target at the start
+  start_angle_high: 60.0
+  start_spin_max: 0.01
+  steps: 60                        # 30 seconds
+  inertia_shrink: 0.30             # the real inertia shrinks by 30% during every test run
+  at_rest_angle: 2.0               # degrees
+  at_rest_spin: 0.005              # radians per second
+  lost_control_spin: 0.5           # radians per second: faster than this = tumbling
+  sun_shadow_switch_steps: 20      # 10 seconds sunlight, 10 seconds shadow, ...
+
+conditions: [perfect, measurement_100_shots, measurement_10_shots, gate_errors_moderate, gate_errors_severe,
+             readout_bias_moderate, readout_bias_severe, drift_during_run, sun_shadow_switching, combined_realistic]
+defect_conditions: [gate_errors_moderate, gate_errors_severe, readout_bias_moderate, readout_bias_severe,
+                    drift_during_run, sun_shadow_switching, combined_realistic]
+
+# version: which predictor, running correction on or off. Classical and true-equations versions run only on
+# perfect hardware (they have no quantum part).
+versions:
+  - name: true_equations_mpc
+    predictor: true_equations
+    offset_free: false
+    why: "best possible reference (knows the equations and today's inertia)"
+  - name: classical_mpc
+    predictor: classical
+    offset_free: false
+    why: "classical Chain-Mamba, no correction"
+  - name: classical_mpc_offset_free
+    predictor: classical
+    offset_free: true
+    why: "the perfect-hardware REFERENCE for the pass rules (same controller structure as both fixes)"
+  - name: quantum_no_fix
+    predictor: quantum
+    offset_free: false
+    why: "shows the problem"
+  - name: quantum_noise_aware_only
+    predictor: quantum_noise_aware
+    offset_free: false
+    why: "practising with noise alone"
+  - name: quantum_offset_free_only
+    predictor: quantum
+    offset_free: true
+    why: "running correction alone"
+  - name: quantum_both_fixes
+    predictor: quantum_noise_aware
+    offset_free: true
+    why: "the proposal"
+
+decision_rule:
+  reference_version: classical_mpc_offset_free
+  problem_real:                     # quantum_no_fix in any defect condition vs itself on perfect hardware
+    cost_rise_percent: 20
+    at_rest_drop_points: 10
+    any_lost_control: true
+  fix_works:                        # quantum_both_fixes in every condition vs the reference
+    cost_above_reference_percent: 10
+    at_rest_below_reference_points: 5
+    lost_control_allowed: 0
+  measurement_noise_negligible_percent: 5
+
+quick:
+  data:
+    train_trajectories: 40
+    val_trajectories: 10
+    test_trajectories: 10
+  training:
+    epochs: 2
+  test:
+    starts: 4
+    steps: 8
+  solver:
+    iterations: 3
+    first_iterations: 5
+  conditions: [perfect, combined_realistic]
+  defect_conditions: [combined_realistic]

@@ -595,3 +595,35 @@ machine (processor, to match the exp04 numbers). The stored Chain-Mamba with mem
 
 
 Results: `outputs/mpc01_stabilise/summary.md`, `results.csv`, `metrics.json`, `figures/`, details in `log.txt`.
+
+### Space paper, pilot 1 — quantum hardware defects in a spacecraft controller (separate paper)
+
+A separate paper that reuses Chain-Mamba, your training recipe and the running correction (offset-free control)
+unchanged. A spacecraft turns to point at a target while its moment of inertia shrinks by 30% (fuel use).
+Chain-Mamba (with memory, warmed up on the last 10 measured steps) predicts its motion inside model predictive
+control. In the quantum versions, Chain-Mamba's gate layer is a simulated 6-qubit circuit whose outputs get
+realistic hardware defects (limited measurements, gate errors, readout bias, drift, sun/shadow switching).
+Code: `src/systems/spacecraft.py`, `src/space/`, `tools/run_space.py`, config `configs/space/space01_quantum_hardware.yaml`.
+Nothing in the certificate paper's code was changed.
+
+```bash
+# mathematical signal (seconds, processor only)
+!python /kaggle/working/-MAMBA-STABILITY-/analysis/s01_gain_margin.py
+
+# code check (a few minutes; do not interpret)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/run_space.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/space/space01_quantum_hardware.yaml \
+    --seed 0 \
+    --device auto \
+    --quick yes
+
+# the real single-seed run (graphics card; trains 3 predictors, then 43 closed-loop runs; roughly 3 hours)
+!python /kaggle/working/-MAMBA-STABILITY-/tools/run_space.py \
+    --config /kaggle/working/-MAMBA-STABILITY-/configs/space/space01_quantum_hardware.yaml \
+    --seed 0 \
+    --device auto \
+    --quick no
+```
+
+Results: `outputs/space01_quantum_hardware/summary.md`, `results.csv` (resumes after an interruption),
+`metrics.json`, `verdict.json`, trained predictors in `models/`, details in `log.txt`.
