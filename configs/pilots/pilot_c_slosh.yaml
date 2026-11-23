@@ -1,0 +1,135 @@
+# SPACE PILOT C — turning a spacecraft during an engine burn while its fuel sloshes (single seed: direction only)
+#
+# Engineering problem (stated in published work):
+#   * Olucha Delgado, Das, Toth (TU Eindhoven) and Preda (European Space Agency), "Data-driven Learning of LPV
+#     Surrogate Models of Fuel Sloshing", arXiv 2604.12505 (2026): their learned surrogate was built for ONE fill
+#     level (60%), one tank, zero gravity, and was not used inside model predictive control; on their second
+#     manoeuvre its fit for the spacecraft angle was -66%.
+#   * Fogel, Mishra, Burlion (Rutgers), arXiv 2412.20659 (AIAA SciTech 2023): shortening slosh settling times
+#     "will improve the maneuverability and performance of spacecraft"; their learned slosh model is weak
+#     outside the training range.
+#   * Industry study (Toulouse, airdrive copy): no macroscopic mathematical model of sloshing during attitude
+#     manoeuvres exists.
+#
+# Why chained prediction is the natural tool (the "obvious" advantage):
+#   The fuel is not measured. A model that is fed its own predictions AND keeps a short memory of what it has
+#   seen can work out the hidden slosh from the spacecraft's recent motion and plan turns that leave the fuel
+#   calm — for any fill level, from flight data alone. A model without memory, or the usual frozen-fuel model,
+#   cannot see the slosh at all.
+#
+# Run:  python tools/run_pilot_slosh.py --config configs/pilots/pilot_c_slosh.yaml --seed 0 --device cpu
+
+name: pilot_c_slosh
+inherit: [../models/chain_mamba.yaml]
+
+question: >
+  Can model predictive control that plans with your chained Chain-Mamba predictor (memory kept, trained only on
+  measured spacecraft angle and turn rate over many fill levels) settle a spacecraft's pointing after a turn
+  during an engine burn clearly faster than the standard controllers that ignore the slosh?
+
+hypothesis: >
+  (1) The problem is real: model predictive control with the usual frozen-fuel model settles at least 1.5 times
+  slower than model predictive control that knows the true slosh (median settling time).
+  (2) Chain-Mamba with memory settles at least 30% faster (median) than the better of the two standard
+  controllers (low-bandwidth proportional-derivative law, frozen-fuel model predictive control), on fill levels
+  not used in training, and never settles in fewer cases than either of them.
+
+math_signal:
+  signal: POSITIVE (problem real; memory needed and sufficient)
+  what_was_checked: >
+    analysis/p04_slosh_signal.py, linearised around rest. A 10-degree slosh shakes the pointing by 0.10-0.30
+    degrees (1-3 times the 0.1-degree settling threshold) and is lightly damped (damping ratio 0.011, decay time
+    about 40 s), so the problem is real. The slosh period moves 64% between a 30% and a 90% tank (3.2 s to 1.6 s),
+    so a model tuned for one fill level is wrong for the others. Measuring angle and turn rate makes the slosh
+    observable after 2 steps, so it can be inferred from history; Chain-Mamba's memory (time scale up to about 20
+    steps) is long enough. A memory-free predictor has an error floor of 0.28-0.42 degrees per second per step
+    on the turn rate for a 10-degree slosh.
+  prediction: >
+    frozen-fuel controllers settle late or not at all when slosh is present; Chain-Mamba with memory close to the
+    true-model controller; Chain-Mamba without memory similar to the frozen-fuel controller.
+  assumptions: >
+    pendulum model of the slosh (not the paper's particle fluid simulator, which is not reachable here); constant
+    forward acceleration; Adam solver; small sensor noise; single seed shows direction only.
+
+# ---------------------------------------------------------------------------------------------------------
+system:
+  dt: 0.2                 # s between control decisions
+  substeps: 4
+  u_max: 0.4              # N m
+  dry_inertia: 8.0        # kg m^2
+  hinge_offset: 0.3       # m
+  thrust_acceleration: 0.5   # m/s^2 during the burn
+  tank_fuel_mass: 30.0    # kg when full
+  damping_ratio: 0.01
+  nominal_fill: 0.6       # the fill level the standard controllers are tuned for
+  angle_noise_degrees: 0.003     # sensor noise (standard deviation)
+  rate_noise_degrees: 0.002      # degrees per second
+
+data:
+  train_trajectories: 600
+  val_trajectories: 60
+  test_trajectories: 60
+  trajectory_steps: 300          # 60 s each
+  fill_low: 0.3                  # training fill levels drawn evenly from 0.3 to 0.9
+  fill_high: 0.9
+  start_angle_degrees: 20.0
+  start_slosh_degrees: 15.0
+  context_len: 20                # measured steps shown before chaining starts (warms up the memory)
+  horizon: 25                    # chained steps in training = the controller's plan (5 s)
+  window_stride: 6
+  data_seed: 2026
+
+models:
+  memory:                        # your Chain-Mamba, memory kept (3,310 parameters on Van der Pol sizes)
+    model: {mixer: true, ffn_hidden: 20}
+  no_memory:                     # exp04 memory removed, widened to the same size
+    model: {mixer: false, ffn_hidden: 44}
+
+# Your recipe (exp04), shortened from 80 to 40 epochs for this pilot (to disclose)
+training:
+  epochs: 40
+  batch_size: 128
+  lr: 2.0e-3
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  lr_decay_gamma: 0.97
+  weight_decay: 1.0e-5
+  rollout_curriculum: {start: 5, epochs: 15}
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  grad_clip: 1.0
+  clamp_state: 50.0
+
+controller:
+  horizon: 25                    # 5 s ahead (1.6 to 3 slosh periods)
+  angle_scale_degrees: 0.2       # pseudo-Huber cost: quadratic below this, linear above
+  rate_scale_degrees: 0.05
+  q_angle: 1.0
+  q_rate: 0.3
+  p_angle: 5.0                   # last planned step
+  p_rate: 2.0
+  r_push: 0.01
+  r_change: 0.05
+  pd_bandwidth_hz: 0.1           # the paper's attitude law: 0.1 Hz bandwidth, damping 0.7
+  pd_damping: 0.7
+
+solver:
+  iterations: 20
+  first_iterations: 60
+  learning_rate: 0.1             # in units of the push limit
+
+test:
+  fills: [0.35, 0.5, 0.7, 0.85]  # not used as such in training (training fills are random)
+  targets_degrees: [15.0, -25.0]
+  start_slosh_degrees: [0.0, 12.0]
+  steps: 300                     # 60 s
+  settle_angle_degrees: 0.1
+  lost_rate_degrees: 10.0
+  lost_slosh_degrees: 80.0
+
+decision_rule:
+  valid_if: "true-model controller settles in at least 75% of cases (otherwise the solver floor is too high: INVALID)"
+  problem_real: "frozen-fuel MPC median settling >= 1.5 x true-model MPC median settling"
+  go: "Chain-Mamba with memory median settling <= 0.7 x min(PD, frozen-fuel MPC) and settled count >= both"
+  reported_not_ruled: "pendulum model at 60% fill told the TRUE slosh state (generous physics baseline); Chain-Mamba without memory"

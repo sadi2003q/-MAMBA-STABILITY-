@@ -1,0 +1,61 @@
+# Space pilot C — PREDICTION test (Kaggle notebook pilot_c_slosh_prediction.ipynb). Single seed: direction only.
+name: pilot_c_slosh_prediction
+inherit: [../models/chain_mamba.yaml]
+
+system:
+  dt: 0.2
+  substeps: 4
+  u_max: 0.4
+  dry_inertia: 8.0
+  hinge_offset: 0.3
+  thrust_acceleration: 0.5
+  tank_fuel_mass: 30.0
+  damping_ratio: 0.01
+  nominal_fill: 0.6
+  angle_noise_degrees: 0.003
+  rate_noise_degrees: 0.002
+
+data:
+  train_trajectories: 600
+  val_trajectories: 60
+  test_per_fill: 15
+  trajectory_steps: 300
+  fill_low: 0.3
+  fill_high: 0.9
+  test_fills: [0.35, 0.5, 0.7, 0.85]   # training never comes closer than test_gap to these
+  test_gap: 0.03
+  start_angle_degrees: 20.0
+  start_slosh_degrees: 15.0
+  context_len: 20
+  horizon: 25
+  window_stride: 6
+  data_seed: 2026
+
+arms:
+  chain_mamba_memory:
+    model: {name: chain_mamba, d_model: 12, d_state: 8, d_conv: 4, n_layers: 2, expand: 1, dt_rank: 1,
+            dt_min: 0.06, dt_max: 0.5, delta_floor: 0.05, a_min: 1.0, ffn_hidden: 20, bias: true,
+            final_norm: false, use_parallel_scan: true, mixer: true}
+  chain_mamba_no_memory:
+    model: {name: chain_mamba, d_model: 12, d_state: 8, d_conv: 4, n_layers: 2, expand: 1, dt_rank: 1,
+            dt_min: 0.06, dt_max: 0.5, delta_floor: 0.05, a_min: 1.0, ffn_hidden: 44, bias: true,
+            final_norm: false, use_parallel_scan: true, mixer: false}
+  lstm:
+    model: {name: lstm, hidden_size: 25}
+  gru:
+    model: {name: gru, hidden_size: 29}
+
+training:
+  epochs: 40
+  batch_size: 128
+  lr: 2.0e-3
+  lr_schedule: cosine
+  warmup_epochs: 3
+  lr_final_fraction: 0.01
+  lr_decay_gamma: 0.97
+  weight_decay: 1.0e-5
+  rollout_curriculum: {start: 5, epochs: 15}
+  teacher_aux_weight: 0.5
+  state_noise_std: 0.0
+  grad_clip: 1.0
+  clamp_state: 50.0

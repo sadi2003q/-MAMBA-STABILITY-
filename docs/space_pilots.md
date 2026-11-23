@@ -75,3 +75,30 @@ python /kaggle/working/-MAMBA-STABILITY-/tools/run_pilot_asteroid.py \
 `--quick yes` is a code check only (tiny data, 2 epochs, a few steps) — never interpret its numbers.
 Results: `outputs/pilot_a_attitude_offset/` and `outputs/pilot_b_asteroid_proximity/` (summary.md,
 results.csv, metrics.json, predictor_check.json, log.txt, models/).
+
+## Pilot C — spacecraft with sloshing fuel during an engine burn (23 November 2026)
+
+- **Papers:** Olucha Delgado, Das, Tóth, Preda (2026), arXiv 2604.12505 — learned fuel-slosh model for one fill
+  level only, not used inside model predictive control; Fogel, Mishra, Burlion, arXiv 2412.20659 — shorter slosh
+  settling improves manoeuvrability.
+- **Control test** (`tools/run_pilot_slosh.py`, config `pilot_c_slosh.yaml`): **STOP**; the controller design
+  itself stirred the fuel (even the true-model controller lost to the 0.1 Hz attitude law). See results_log.md.
+- **Prediction test** (`tools/run_pilot_c_prediction.py`, config `pilot_c_slosh_prediction.yaml`): Chain-Mamba with
+  memory vs memory removed vs long short-term memory network vs gated recurrent unit, normal-operation data only,
+  4 fill levels never seen in training. GO if memory is at least 30% below memory removed and at most 10% above the
+  better standard network (25-step angle error).
+- **Simulator:** pendulum fuel model (`src/systems/slosh_spacecraft.py`). The paper's fluid simulator is printed by
+  `tools/inspect_fluid_simulator.py`, to be connected next.
+
+```bash
+# Kaggle cell (Internet on)
+!git clone -b space-slosh-pilot https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY-
+%cd /kaggle/working/-MAMBA-STABILITY-
+!python tools/run_pilot_c_prediction.py \
+    --config configs/pilots/pilot_c_slosh_prediction.yaml \
+    --seed 0 \
+    --simulator pendulum \
+    --data-style normal_operations \
+    --device auto \
+    --quick no
+```
