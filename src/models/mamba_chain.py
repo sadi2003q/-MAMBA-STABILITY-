@@ -56,6 +56,26 @@ Why each design choice exists (diagnosis from exp01d seed 0, see docs/chain_mamb
 4. No root-mean-square normalisation in front of the read-out: it would remove the size of the feature
    vector, and the size of the next increment changes by more than a factor of 10 along the orbit.
 
+----------------------------------------------------------------------------------------------------------
+Optional switch: ROTATING memory (rotation = True; default False keeps every earlier result unchanged)
+----------------------------------------------------------------------------------------------------------
+Why: with rotation off, every memory slot is multiplied by a real number between 0 and 0.951 at each step,
+so it can only fade; it can never swing up and down. A hidden oscillation (for example fuel slosh) is a
+fading WAVE, and a sum of fading numbers cannot carry a wave well (analysis/p05_memory_shape_check.py:
+54-87% of the wave lost, against 0.5-7% for rotating memory). The long short-term memory network can rotate
+because its full recurrent weight matrix mixes its memory numbers; Mamba-3 (Lahoti et al., ICLR 2026) also
+added a complex-valued (rotating) state update for this reason.
+
+How: the 8 memory slots of each channel are used as 4 PAIRS. Each pair is one complex number
+    h = h_real + i h_imaginary
+and its decay factor is a complex number
+    a = exp(dt x A) x (cos(dt x w) + i sin(dt x w))
+        size  exp(dt x A) <= 0.951  (exactly the same certificate as before)
+        turn  dt x w radians per step, with a learned rotation speed w > 0 per pair and channel
+B and C use their 8 numbers as 4 complex numbers (first 4 = real parts, last 4 = imaginary parts), and the
+read-out takes the real part. The number of trainable weights is the SAME as without rotation: the 8 decay
+rates per channel become 4 decay rates + 4 rotation speeds.
+
 The read-out anchor and the increment normalisation live in src/models/dynamics.py (under `readout:` in the
 config), because they are not specific to this core.
 
@@ -119,12 +139,42 @@ class MarginDecay(nn.Module):
 
 
 # ==========================================================================================================
+# Rotation speeds for the optional rotating memory
+# ==========================================================================================================
+class RotationSpeed(nn.Module):
+    """
+    Rotation speeds  w = exp(w_log) > 0  (radians per unit of step size), one per memory pair and channel.
+    The turn per time step is dt x w. Starting values are GENERIC (not tuned to any system): spread evenly
+    on a log scale from 0.3 to 18, so that with the starting step sizes (0.06 to 0.5) the turn per step
+    covers slow and fast waves alike (about 0.02 to 9 radians per step).
+    No random numbers are drawn here, so the other starting weights are the same as without rotation.
+    """
+
+    def __init__(self, channels: int, pairs: int, slowest: float = 0.3, fastest: float = 18.0):
+        super().__init__()
+
+        # Step 1: one speed per pair, evenly spread on a log scale, e.g. 4 pairs -> 0.3, 1.2, 4.6, 18
+        log_speeds = torch.linspace(math.log(slowest), math.log(fastest), pairs)    # [pairs]
+        one_row = log_speeds.unsqueeze(0)                                          # [1, pairs]
+        all_rows = one_row.repeat(channels, 1)                                     # [channels, pairs]
+
+        # Step 2: the trainable numbers are the logarithms (so the speed is always positive)
+        self.w_log = nn.Parameter(all_rows.clone())
+
+        # Step 3: no weight decay on these (weight decay would pull them towards a speed of 1)
+        self.w_log._no_weight_decay = True
+
+    def w(self) -> torch.Tensor:
+        return torch.exp(self.w_log)                                               # [channels, pairs]
+
+
+# ==========================================================================================================
 # One Chain-Mamba layer:  memory part (optional)  ->  gated feed-forward part
 # ==========================================================================================================
 class ChainMambaLayer(nn.Module):
     def __init__(self, d_model: int, d_state: int, d_conv: int, expand: int, dt_rank: int, dt_min: float,
                  dt_max: float, delta_floor: float, a_min: float, ffn_hidden: int, bias: bool,
-                 mixer: bool = True):
+                 mixer: bool = True, rotation: bool = False):
         super().__init__()
 
         # Step 1: width of the expanded channels inside the memory part
@@ -135,6 +185,12 @@ class ChainMambaLayer(nn.Module):
         #   mixer = False -> memory removed: only the gated feed-forward layer is kept
         # bool(...) turns values such as 1, 0 or false from the settings file into True / False
         self.mixer = bool(mixer)
+
+        # Step 2b: rotating memory (see the top of this file). Needs an even number of memory slots.
+        self.rotation = bool(rotation)
+        if self.rotation and d_state % 2 != 0:
+            raise ValueError(f"rotation = true needs an even d_state (memory slots in pairs), got {d_state}.")
+        self.pairs = d_state // 2
 
         # Step 3: store the sizes we need later
         self.E = E
@@ -165,7 +221,13 @@ class ChainMambaLayer(nn.Module):
             self._init_dt(dt_min, dt_max)
 
             # 4e: the decay rates with a margin (the stability certificate lives here)
-            self.decay = MarginDecay(E, d_state, a_min)
+            #     rotation on: one decay rate per PAIR of slots, plus one rotation speed per pair
+            #     (same number of trainable weights; no random numbers drawn, so seed-0 weights match)
+            if self.rotation:
+                self.decay = MarginDecay(E, self.pairs, a_min)
+                self.rotation_speed = RotationSpeed(E, self.pairs)
+            else:
+                self.decay = MarginDecay(E, d_state, a_min)
 
             # 4f: direct path around the memory, and the output projection back to d_model
             self.D = nn.Parameter(torch.ones(E))
@@ -254,6 +316,10 @@ class ChainMambaLayer(nn.Module):
         softplus_part = F.softplus(self.dt_proj(dt_in))                    # always > 0
         dt = self.delta_floor + softplus_part                              # [..., E], >= delta_floor
 
+        # Step 3 (rotation on): complex decay factor, complex B and C -> see _selective_rotating
+        if self.rotation:
+            return self._selective_rotating(dt, xc, Bm, Cm)
+
         # Step 3: decay factor  a = exp(dt x A).  dt >= 0.05 and A <= -1  ->  a <= exp(-0.05) = 0.951
         A = self.decay.A()                                                 # [E, d_state]
         a = torch.exp(dt.unsqueeze(-1) * A)                                # [..., E, d_state]
@@ -263,6 +329,49 @@ class ChainMambaLayer(nn.Module):
         b = dt_times_input.unsqueeze(-1) * Bm.unsqueeze(-2)                # [..., E, d_state]
 
         return a, b, Cm
+
+    def _selective_rotating(self, dt, xc, Bm, Cm):
+        """
+        Rotating memory: the 8 slots of each channel are 4 complex numbers (pairs).
+            dt [..., E]   step sizes (>= delta_floor)        xc [..., E]   memory-branch input
+            Bm [..., 8]   first 4 = real parts, last 4 = imaginary parts of B
+            Cm [..., 8]   first 4 = real parts, last 4 = imaginary parts of C
+        Returns complex a [..., E, 4], complex b [..., E, 4], complex C [..., 4].
+        """
+        P = self.pairs
+
+        # Step 1: size of the decay factor: exactly as before,  exp(dt x A) <= exp(-0.05) = 0.951
+        A = self.decay.A()                                                 # [E, 4]
+        size = torch.exp(dt.unsqueeze(-1) * A)                             # [..., E, 4]
+
+        # Step 2: turn per step: dt x w radians (w = learned rotation speed, always positive)
+        w = self.rotation_speed.w()                                        # [E, 4]
+        turn = dt.unsqueeze(-1) * w                                        # [..., E, 4]
+
+        # Step 3: complex decay factor  a = size x (cos(turn) + i sin(turn));  |a| = size <= 0.951
+        a = torch.complex(size * torch.cos(turn), size * torch.sin(turn))  # [..., E, 4]
+
+        # Step 4: B and C as complex numbers
+        B_complex = torch.complex(Bm[..., :P], Bm[..., P:])               # [..., 4]
+        C_complex = torch.complex(Cm[..., :P], Cm[..., P:])               # [..., 4]
+
+        # Step 5: what is written into memory:  (dt x xc) for each channel, spread over pairs by B
+        dt_times_input = dt * xc                                           # [..., E]
+        written = dt_times_input.unsqueeze(-1).to(B_complex.dtype)         # [..., E, 1] (complex)
+        b = written * B_complex.unsqueeze(-2)                              # [..., E, 4]
+
+        return a, b, C_complex
+
+    @staticmethod
+    def _read(H, Cm):
+        """
+        Read the memory with C, summed over the slots.  H [..., E, slots], Cm [..., slots]  ->  [..., E].
+        With rotating memory both are complex and the REAL part is kept (the prediction is a real number).
+        """
+        read_out = (H * Cm.unsqueeze(-2)).sum(-1)
+        if torch.is_complex(read_out):
+            read_out = read_out.real
+        return read_out
 
     def _ffn(self, h):
         """Gated feed-forward part (SwiGLU). Looks only at the current step."""
@@ -323,7 +432,7 @@ class ChainMambaLayer(nn.Module):
             H = sequential_scan(a, b, h0)
 
         # Step 6: read out the memory with C, add the direct path D x xc, then apply the gate
-        read_out = (H * Cm.unsqueeze(-2)).sum(-1)                          # [B, T, E]
+        read_out = self._read(H, Cm)                                       # [B, T, E]
         direct = self.D * xc
         y = (read_out + direct) * F.silu(z)
 
@@ -373,7 +482,7 @@ class ChainMambaLayer(nn.Module):
             h_new = a * h_prev + b
 
         # Step 6: read out the memory with C, add the direct path D x xc, then apply the gate
-        read_out = (h_new * Cm.unsqueeze(-2)).sum(-1)                      # [B, E]
+        read_out = self._read(h_new, Cm)                                   # [B, E]
         direct = self.D * xc
         y = (read_out + direct) * F.silu(z)
 
@@ -398,7 +507,8 @@ class ChainMambaCore(nn.Module):
     def __init__(self, in_dim: int, d_model: int = 16, d_state: int = 8, d_conv: int = 4, n_layers: int = 2,
                  expand: int = 1, dt_rank: int = 1, dt_min: float = 0.06, dt_max: float = 0.5,
                  delta_floor: float = 0.05, a_min: float = 1.0, ffn_hidden: int = 24, bias: bool = True,
-                 final_norm: bool = False, use_parallel_scan: bool = True, mixer: bool = True):
+                 final_norm: bool = False, use_parallel_scan: bool = True, mixer: bool = True,
+                 rotation: bool = False):
         super().__init__()
 
         # Step 1: settings
@@ -411,7 +521,7 @@ class ChainMambaCore(nn.Module):
         layer_list = []
         for _ in range(n_layers):
             layer = ChainMambaLayer(d_model, d_state, d_conv, expand, dt_rank, dt_min, dt_max, delta_floor,
-                                    a_min, ffn_hidden, bias, mixer)
+                                    a_min, ffn_hidden, bias, mixer, rotation)
             layer_list.append(layer)
         self.layers = nn.ModuleList(layer_list)
 

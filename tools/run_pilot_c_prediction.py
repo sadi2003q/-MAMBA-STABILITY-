@@ -52,10 +52,11 @@ from src.utils.cli import add_yes_no  # noqa: E402
 from src.utils.config import REPO_ROOT, load_yaml_with_inherit  # noqa: E402
 from src.utils.console import ConsoleLog  # noqa: E402
 
-ARM_NAMES = ["chain_mamba_memory", "chain_mamba_no_memory", "lstm", "gru"]
+# The arms are read from the config (in the order written there); the rotation config adds one more.
 
 LABELS = {
     "frozen_fuel_model": "Frozen-fuel physics model (reference)",
+    "chain_mamba_rotating": "Chain-Mamba, rotating memory (new)",
     "chain_mamba_memory": "Chain-Mamba with memory (yours)",
     "chain_mamba_no_memory": "Chain-Mamba memory removed",
     "lstm": "Long short-term memory network",
@@ -112,12 +113,14 @@ def main():
         cfg["training"]["epochs"] = 2
     device = pick_device(args.device)
     seed = args.seed
+    ARM_NAMES = list(cfg["arms"].keys())
+    rule_type = cfg.get("decision_rule", {}).get("type", "memory_vs_standard")
     out = REPO_ROOT / "outputs" / (cfg["name"] + ("_quick" if args.quick else ""))
     out.mkdir(parents=True, exist_ok=True)
     log = ConsoleLog(out / "log.txt")
 
     log.say("+" + "-" * 78 + "+")
-    title = f"SPACE PILOT C — sloshing fuel, prediction   (seed {seed}: direction only)"
+    title = f"SPACE PILOT C — {cfg['name']}   (seed {seed}: direction only)"
     if args.quick:
         title = title + "   CODE CHECK ONLY"
     log.say("| " + title.ljust(77) + "|")
@@ -207,14 +210,41 @@ def main():
                    "data_style": args.data_style, "quick": args.quick}, handle, indent=1)
 
     # ------------------------------------------------------------------ Step 6: decision
-    ours = average_over_fills("chain_mamba_memory", "angle_by_fill", horizon)
+    plain = average_over_fills("chain_mamba_memory", "angle_by_fill", horizon)
     no_memory = average_over_fills("chain_mamba_no_memory", "angle_by_fill", horizon)
     lstm_error = average_over_fills("lstm", "angle_by_fill", horizon)
     gru_error = average_over_fills("gru", "angle_by_fill", horizon)
     best_standard = min(lstm_error, gru_error)
-    memory_helps = ours <= 0.7 * no_memory
-    as_good_as_standard = ours <= 1.1 * best_standard
-    if memory_helps and as_good_as_standard:
+    rule_lines = []
+    if rule_type == "rotation_vs_standard":
+        # rule written in configs/pilots/pilot_c_slosh_rotation.yaml before the run
+        rotating = average_over_fills("chain_mamba_rotating", "angle_by_fill", horizon)
+        beats_lstm = rotating <= 0.9 * lstm_error
+        beats_gru = rotating <= gru_error
+        passed = beats_lstm and beats_gru
+        meaning = [
+            "   - rotating vs long short-term memory network:  " + change_words(rotating, lstm_error),
+            "   - rotating vs gated recurrent unit:            " + change_words(rotating, gru_error),
+            "   - rotating vs plain Chain-Mamba with memory:   " + change_words(rotating, plain),
+        ]
+        rule_lines.append(f"   - at least 10% below long short-term memory:  {'yes' if beats_lstm else 'no'}"
+                          f"   ({rotating:.4f} vs {lstm_error:.4f})")
+        rule_lines.append(f"   - not above gated recurrent unit:             {'yes' if beats_gru else 'no'}"
+                          f"   ({rotating:.4f} vs {gru_error:.4f})")
+    else:
+        # rule written in configs/pilots/pilot_c_slosh_prediction.yaml before the run
+        memory_helps = plain <= 0.7 * no_memory
+        as_good_as_standard = plain <= 1.1 * best_standard
+        passed = memory_helps and as_good_as_standard
+        meaning = [
+            "   - with memory vs memory removed:               " + change_words(plain, no_memory),
+            "   - with memory vs best standard memory network: " + change_words(plain, best_standard),
+        ]
+        rule_lines.append(f"   - at least 30% below memory removed:        {'yes' if memory_helps else 'no'}"
+                          f"   ({plain:.4f} vs {no_memory:.4f})")
+        rule_lines.append(f"   - at most 10% above best standard network:  {'yes' if as_good_as_standard else 'no'}"
+                          f"   ({plain:.4f} vs {best_standard:.4f})")
+    if passed:
         verdict = "GO (worth confirming with 8 seeds)"
     else:
         verdict = "STOP"
@@ -248,14 +278,12 @@ def main():
         lines.append(row)
     lines.append("")
     lines.append("  What this means:")
-    lines.append("   - with memory vs memory removed:               " + change_words(ours, no_memory))
-    lines.append("   - with memory vs best standard memory network: " + change_words(ours, best_standard))
+    for line in meaning:
+        lines.append(line)
     lines.append("")
     lines.append("  Decision rule (fixed before the run), 25-step angle error:")
-    lines.append(f"   - at least 30% below memory removed:        {'yes' if memory_helps else 'no'}"
-                 f"   ({ours:.4f} vs {no_memory:.4f})")
-    lines.append(f"   - at most 10% above best standard network:  {'yes' if as_good_as_standard else 'no'}"
-                 f"   ({ours:.4f} vs {best_standard:.4f})")
+    for line in rule_lines:
+        lines.append(line)
     lines.append("")
     lines.append("  Decision: " + verdict)
     lines.append("+" + "-" * 78 + "+")
@@ -276,7 +304,7 @@ def main():
         for step in steps:
             angle_curve.append(average_over_fills(name, "angle_by_fill", step))
             rate_curve.append(average_over_fills(name, "rate_by_fill", step))
-        width = 2.6 if name == "chain_mamba_memory" else 1.4
+        width = 2.6 if name in ("chain_mamba_memory", "chain_mamba_rotating") else 1.4
         axes[0].plot(steps, angle_curve, label=LABELS[name], linewidth=width)
         axes[1].plot(steps, rate_curve, label=LABELS[name], linewidth=width)
     axes[0].set_title("Angle error (degrees)")

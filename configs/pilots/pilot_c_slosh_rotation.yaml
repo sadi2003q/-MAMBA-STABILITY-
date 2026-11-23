@@ -1,0 +1,53 @@
+# Space pilot C, part 3 — ROTATING memory for Chain-Mamba (single seed: direction only)
+#
+# Same data, seed, recipe and four models as pilot_c_slosh_prediction.yaml, plus one new arm:
+# Chain-Mamba with rotating memory (switch `rotation: true` in src/models/mamba_chain.py).
+#
+# Why (from the previous run, 23 Nov 2026, seed 0, 25-step angle error, 4 unseen fill levels):
+#   long short-term memory network 0.399, gated recurrent unit 0.415, Chain-Mamba with memory 0.457,
+#   memory removed 0.789 degrees. The previous rule (Chain-Mamba within 10% of the best standard network)
+#   failed: +15%.
+#
+# python tools/check_rotation.py --config configs/pilots/pilot_c_slosh_rotation.yaml       (first)
+# python tools/run_pilot_c_prediction.py --config configs/pilots/pilot_c_slosh_rotation.yaml --seed 0 ...
+
+name: pilot_c_slosh_rotation
+inherit: [pilot_c_slosh_prediction.yaml]
+
+question: >
+  Does giving Chain-Mamba's memory the ability to ROTATE (as the long short-term memory network's memory can),
+  while keeping the same size, recipe and stability certificate, let it predict the spacecraft with sloshing fuel
+  better than the long short-term memory network?
+
+hypothesis: >
+  Chain-Mamba with rotating memory has a 25-step angle error at least 10% below the long short-term memory
+  network and no higher than the gated recurrent unit (average of the 4 unseen fill levels, seed 0).
+
+math_signal:
+  signal: POSITIVE (explains the gap; does not prove training will find the fix)
+  what_was_checked: >
+    analysis/p05_memory_shape_check.py: best-case error of carrying the true hidden slosh wave for 25 steps with
+    8 memory numbers. Fading-only memory (Chain-Mamba now) leaves 54-87% of the wave unexplained, whether its
+    largest decay is 0.951 or 0.9975; rotating memory leaves 0.5-7% (robust to the fitting penalty, 1e-5 to 1e-2).
+    So rotation, not memory length, is what the long short-term memory network has and Chain-Mamba lacks.
+  prediction: >
+    rotating Chain-Mamba below plain Chain-Mamba (0.457) and close to or below the long short-term memory
+    network (0.399). Honest estimate before the run: likely better than plain Chain-Mamba; the 10% margin over
+    the long short-term memory network is about a coin flip.
+  assumptions: >
+    the best-case fit lets the memory run on its own for 25 steps (the real model also receives its own
+    predictions, which partly refresh it); training may not find good rotation speeds; single seed.
+
+arms:
+  chain_mamba_rotating:
+    model: {name: chain_mamba, d_model: 12, d_state: 8, d_conv: 4, n_layers: 2, expand: 1, dt_rank: 1,
+            dt_min: 0.06, dt_max: 0.5, delta_floor: 0.05, a_min: 1.0, ffn_hidden: 20, bias: true,
+            final_norm: false, use_parallel_scan: true, mixer: true, rotation: true}
+    why: >
+      Only change from chain_mamba_memory: rotation on (same size, 3,310 weights; same random starting
+      weights; same certificate |a| <= 0.951). Generic starting rotation speeds 0.3-18, not tuned to the slosh.
+
+decision_rule:
+  type: rotation_vs_standard
+  go: "rotating Chain-Mamba 25-step angle error <= 0.9 x long short-term memory network AND <= gated recurrent unit"
+  otherwise: STOP

@@ -102,3 +102,23 @@ results.csv, metrics.json, predictor_check.json, log.txt, models/).
     --device auto \
     --quick no
 ```
+
+### Pilot C, part 3 — rotating memory (switch `rotation: true` in `src/models/mamba_chain.py`)
+
+Rule fixed before the run (configs/pilots/pilot_c_slosh_rotation.yaml): GO if rotating Chain-Mamba's 25-step angle
+error is at least 10% below the long short-term memory network and not above the gated recurrent unit.
+
+```bash
+# Kaggle (Internet on)
+!git clone -b space-slosh-pilot https://github.com/sadi2003q/-MAMBA-STABILITY-.git /kaggle/working/-MAMBA-STABILITY-
+%cd /kaggle/working/-MAMBA-STABILITY-
+!python tools/check_rotation.py \
+    --config configs/pilots/pilot_c_slosh_rotation.yaml
+!python tools/run_pilot_c_prediction.py \
+    --config configs/pilots/pilot_c_slosh_rotation.yaml \
+    --seed 0 \
+    --simulator pendulum \
+    --data-style normal_operations \
+    --device auto \
+    --quick no
+```
