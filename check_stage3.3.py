@@ -7,7 +7,7 @@ from seed_helper import set_seed
 from data import build_data
 from plain_predictor import PlainPredictor
 from evaluation import one_step_error, chained_error
-
+import torch
 
 class configuration:
     plain_predictor = "plain_predictor"
@@ -35,7 +35,7 @@ data = build_data()
 model = PlainPredictor(
     config[configuration.plain_predictor][configuration.hidden_dim]
 )
-# model.load_state_dict(torch.load("outputs/stage3_plain.pt"))
+model.load_state_dict(torch.load("outputs/stage3_plain.pt"))
 states , push = data[configuration.windows][configuration.test]
 normaliser = data[configuration.normaliser]
 error_one_step = one_step_error(model, states, push, normaliser)

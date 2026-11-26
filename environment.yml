@@ -1,0 +1,25 @@
+# Environment for the learn-from-scratch branch (Stages 1 to 7)
+# Works on the MacBook Air (Apple M1) and on Linux.
+#
+# Create it once:     conda env create -f environment.yml
+# Switch to it:       conda activate learn-chain
+# After editing this: conda env update -f environment.yml --prune
+#
+# Why everything comes from pip:
+# mixing conda's numpy with pip's torch loads two copies of the OpenMP library
+# (libomp) on a Mac and crashes with "OMP: Error #15". Getting every library
+# from pip keeps a single copy (the one inside torch).
+
+name: learn-chain
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - numpy          # arrays: data generation, normalisation, windows
+      - matplotlib     # pictures: limit cycle, error growth
+      - pyyaml         # reading config.yaml
+      - torch          # networks and training

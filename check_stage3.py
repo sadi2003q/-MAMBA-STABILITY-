@@ -17,7 +17,7 @@ data = build_data()
 
 
 # Variable Declaration : 
-hidden_dim = config["plain_predictor"]["hidden_dim"]
+hidden_dim = config["plain_predictor"]["hidden_size"]
 batch_size = config["teacher_forcing_training"]["batch_size"]
 epoch = config["teacher_forcing_training"]["epochs"]
 learning_rate = config["teacher_forcing_training"]["learning_rate"]
