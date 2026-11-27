@@ -7,3 +7,25 @@ teacher_forcing_training:
   epochs: 40
   batch_size: 256
   learning_rate: 1.0e-3     
+
+
+
+
+
+stage4_versions:
+  - name: A_plain
+    predict_change: false
+    use_scaling: false
+    use_anchor: false
+  - name: B_change
+    predict_change: true
+    use_scaling: false
+    use_anchor: false
+  - name: C_change_scaling
+    predict_change: true
+    use_scaling: true
+    use_anchor: false
+  - name: D_change_scaling_anchor
+    predict_change: true
+    use_scaling: true
+    use_anchor: true

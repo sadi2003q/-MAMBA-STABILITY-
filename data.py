@@ -194,3 +194,18 @@ def build_data():
     }
 
     return data
+
+
+def typical_step_change(data):
+    # Step 1: the training trajectory, in normalised units (training data only)
+    train_states, _ = data["trajectories"]["train"]
+    normalised_states = normalise_states(train_states, data["normaliser"])
+
+    # Step 2: the change from every step to the next
+    next_values = normalised_states[1:]
+    current_values = normalised_states[:-1]
+    changes = next_values - current_values             # [40000, 2]
+
+    # Step 3: the spread of those changes, one number per component
+    typical_change = np.std(changes, axis=0)           # [2]
+    return typical_change
